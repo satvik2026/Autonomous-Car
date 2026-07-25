@@ -1,0 +1,19 @@
+# Raspberry Pi 3B+ autonomous car — Python dependencies
+#
+# On Raspberry Pi OS 64-bit (Bookworm) the most reliable install is via apt,
+# because these ship as tested system packages built against the Pi's libs:
+#
+#   sudo apt update
+#   sudo apt install -y python3-gpiozero python3-picamera2 python3-opencv \
+#                       python3-numpy pigpio
+#   sudo systemctl enable --now pigpiod      # optional, smoother PWM
+#
+# The pip names below are listed for completeness / non-apt environments.
+# NOTE: picamera2 is NOT reliably pip-installable on the Pi — use the apt
+# package python3-picamera2 (it pulls in the correct libcamera stack).
+
+gpiozero>=1.6
+numpy>=1.21
+opencv-python>=4.5      # on the Pi prefer: sudo apt install python3-opencv
+# picamera2            # install via: sudo apt install python3-picamera2
+# pigpio               # install via: sudo apt install pigpio  (optional PWM backend)

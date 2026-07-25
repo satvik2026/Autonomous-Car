@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EXAMPLE ONLY. This file is NOT used by the current build.
+
+  Your parts list has no GPS module, so the car navigates by CAMERA, not by
+  coordinates (see README, Q4). This file shows the GPX format you WOULD upload
+  if you later add a GPS (e.g. u-blox NEO-6M) and enable the waypoint hook at
+  the bottom of autonomous_car.py.
+
+  A GPX route is a *sequence* of waypoints (<trkpt>), not just a start and end
+  point — so the car follows the corridor you actually want instead of a
+  straight line that might cut across the hill. Replace the placeholder
+  lat/lon values below with real points from your site (walk the route with a
+  phone GPS app that exports GPX, or draw it on a map tool).
+-->
+<gpx version="1.1" creator="autonomous-car-example"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Example off-road path (placeholder coordinates)</name>
+    <trkseg>
+      <trkpt lat="12.900000" lon="77.600000"><name>start</name></trkpt>
+      <trkpt lat="12.900050" lon="77.600040"></trkpt>
+      <trkpt lat="12.900100" lon="77.600085"></trkpt>
+      <trkpt lat="12.900150" lon="77.600120"></trkpt>
+      <trkpt lat="12.900200" lon="77.600160"><name>end</name></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
