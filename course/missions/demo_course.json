@@ -1,0 +1,78 @@
+{
+  "_comment": [
+    "EXAMPLE MISSION -- edit this file to define YOUR route order.",
+    "This encodes the sequence you described: mud course -> U-turn -> slopes",
+    "-> avoid compost pit -> gravel -> cement -> choose court or pathway.",
+    "",
+    "Each stage = behaviour + exit test + guards. Behaviours:",
+    "  follow      : camera-guided open-surface following (the normal mode)",
+    "  pivot_left  : turn in place left  (open-loop, timed)",
+    "  pivot_right : turn in place right (open-loop, timed)",
+    "  creep       : follow, but slowly (for steps, ramps, gravel)",
+    "  straight    : ignore steering, drive straight (short bursts only)",
+    "",
+    "Exit tests (first one that fires wins; timeout_s is the safety net):",
+    "  surface: mud|gravel|cement|grass   + hold_s   (must persist)",
+    "  marker : name from vision/landmarks.MARKER_COLOURS",
+    "  landmark: name registered in the LandmarkBook",
+    "  obstacle_within_m: ultrasonic distance",
+    "  timeout_s: seconds",
+    "",
+    "keepout_bias: constant steer offset (+right/-left). Use when a hazard is",
+    "always on one known side, e.g. grass embankment always on the right."
+  ],
+
+  "zones": {
+    "mud":    {"veg": 0.15, "hard": 0.20, "mud": 0.65},
+    "gravel": {"veg": 0.07, "hard": 0.87, "mud": 0.06},
+    "cement": {"veg": 0.02, "hard": 0.94, "mud": 0.04},
+    "grass":  {"veg": 0.85, "hard": 0.08, "mud": 0.07}
+  },
+
+  "stages": [
+    {
+      "name": "mud_course",
+      "behaviour": "follow",
+      "speed": 0.60,
+      "keepout_bias": -0.05,
+      "notes": "Drive the length of the mud court. Grass embankment is on the RIGHT (see Photos/IMG20260728121844.jpg) so bias gently LEFT. The court itself has ~30% grass tufts - that is drivable, not a keep-out.",
+      "exit": {"obstacle_within_m": 0.5, "timeout_s": 60, "min_time_s": 5}
+    },
+    {
+      "name": "u_turn",
+      "behaviour": "pivot_left",
+      "speed": 0.55,
+      "notes": "OPEN-LOOP timed pivot - drifts a few degrees per run. Add an MPU-6050 IMU to make this closed-loop and repeatable.",
+      "exit": {"timeout_s": 2.6, "min_time_s": 2.0}
+    },
+    {
+      "name": "slopes",
+      "behaviour": "creep",
+      "speed": 0.75,
+      "notes": "Sloped/embankment section. Higher speed = more torque for the climb; creep behaviour keeps steering gentle so the car does not slew sideways across the slope.",
+      "exit": {"surface": "gravel", "hold_s": 1.5, "timeout_s": 45, "min_time_s": 4}
+    },
+    {
+      "name": "avoid_compost_pit",
+      "behaviour": "follow",
+      "speed": 0.55,
+      "keepout_bias": 0.25,
+      "notes": "The compost pit is an EXCAVATED HOLE (Photos/IMG20260728133107.jpg) - a negative obstacle the ultrasonic sensor CANNOT see. It is flanked by bright-green sacks. Bias right, and use the green_sack marker to confirm we are alongside it.",
+      "exit": {"marker": "green_sack", "timeout_s": 25, "min_time_s": 3}
+    },
+    {
+      "name": "gravel_crossing",
+      "behaviour": "creep",
+      "speed": 0.70,
+      "notes": "Loose gravel - low traction, wheels sink. Slow + high torque. Surface reads ~0.87 hard / low saturation.",
+      "exit": {"surface": "cement", "hold_s": 1.5, "timeout_s": 30, "min_time_s": 3}
+    },
+    {
+      "name": "cement_run",
+      "behaviour": "follow",
+      "speed": 0.60,
+      "notes": "On the cement apron/pathway. Final stage - choose the pathway rather than the court by biasing away from the court edge, or split this into two stages with a marker to pick the branch.",
+      "exit": {"timeout_s": 40, "min_time_s": 5}
+    }
+  ]
+}
