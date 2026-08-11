@@ -34,6 +34,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vision import terrain            # noqa: E402
 from vision import landmarks as lm    # noqa: E402
+from vision import steps              # noqa: E402
 from mission import Mission           # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -43,11 +44,26 @@ LEFT_FWD, LEFT_BWD, LEFT_EN = 5, 6, 12
 RIGHT_FWD, RIGHT_BWD, RIGHT_EN = 20, 21, 13
 TRIG_PIN, ECHO_PIN = 23, 24
 
+# OPTIONAL second ultrasonic, angled DOWN at the ground ahead. Off by default
+# so the car runs on the hardware you already have.
+#
+# Why it is worth adding (~2 USD, 2 spare GPIO): it is the only sensor that can
+# see the two things that will actually end your run --
+#   * a STEP: the ground range suddenly SHORTENS
+#   * a HOLE (the compost pit): the ground range suddenly LENGTHENS. A
+#     forward-facing sensor reads "all clear" over a pit right up until the
+#     car drives into it, and the camera cannot see it either.
+DOWN_SENSOR_ENABLED = False
+DOWN_TRIG_PIN, DOWN_ECHO_PIN = 27, 22
+DOWN_NOMINAL_M = 0.25      # expected ground range on flat ground -- calibrate
+DOWN_TOLERANCE = 0.08      # deviation beyond this = step (short) or hole (long)
+
 STOP_DISTANCE = 0.30
 SLOW_DISTANCE = 0.60
 MIN_SPEED = 0.35
 LOOP_HZ = 10
 FRAME_W, FRAME_H = 640, 480
+LANDMARK_EVERY = 5         # ORB is slow on a Pi 3B+; only match every Nth frame
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +78,10 @@ class Car:
                            enable=RIGHT_EN, pwm=True)
         self.sensor = DistanceSensor(echo=ECHO_PIN, trigger=TRIG_PIN,
                                      max_distance=2.0)
+        self.down = None
+        if DOWN_SENSOR_ENABLED:
+            self.down = DistanceSensor(echo=DOWN_ECHO_PIN, trigger=DOWN_TRIG_PIN,
+                                       max_distance=1.0)
 
     def wheels(self, l, r):
         l = float(np.clip(l, -1, 1))
@@ -92,6 +112,22 @@ class Car:
     def distance(self):
         return self.sensor.distance
 
+    def ground(self):
+        """
+        Read the downward sensor. Returns (state, range_m):
+            'flat' | 'step' (ground closer than expected)
+                   | 'hole' (ground further -- a pit or drop-off)
+                   | None   (sensor not fitted)
+        """
+        if self.down is None:
+            return None, None
+        d = self.down.distance
+        if d < DOWN_NOMINAL_M - DOWN_TOLERANCE:
+            return 'step', d
+        if d > DOWN_NOMINAL_M + DOWN_TOLERANCE:
+            return 'hole', d
+        return 'flat', d
+
 
 def open_camera():
     from picamera2 import Picamera2
@@ -114,22 +150,70 @@ def identify_surface(mix, zones):
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
+def load_landmark_book(folder):
+    """
+    Load ORB landmarks from course/landmarks/<name>/*.jpg.
+    Returns None if the folder is absent or empty, so the car runs fine
+    without any landmarks registered.
+    """
+    import cv2
+    import glob
+    if not os.path.isdir(folder):
+        return None
+    book = lm.LandmarkBook()
+    n = 0
+    for name in sorted(os.listdir(folder)):
+        d = os.path.join(folder, name)
+        if not os.path.isdir(d):
+            continue
+        for img in sorted(glob.glob(os.path.join(d, "*.jpg"))):
+            im = cv2.imread(img)
+            if im is not None and book.add(name, im):
+                n += 1
+    if n == 0:
+        return None
+    print(f"Loaded {n} landmark view(s): {', '.join(sorted(book.refs))}")
+    return book
+
+
 def run(mission_path):
     import cv2
     car = Car()
     cam = open_camera()
     mis = Mission.load(mission_path)
+    book = load_landmark_book(os.path.join(os.path.dirname(
+        os.path.abspath(__file__)), "landmarks"))
+    voter = lm.ZoneVoter()
     period = 1.0 / LOOP_HZ
     search_dir = 1
+    frame_no = 0
+    landmark = None
 
     print(f"Course navigator: {len(mis.stages)} stages. Ctrl-C to stop.")
+    if car.down is not None:
+        print("Downward ground sensor: ENABLED")
     try:
         while not mis.finished:
             t0 = time.monotonic()
             stage = mis.stage
+            frame_no += 1
 
             # ---------- REFLEX ----------
             dist = car.distance()
+            ground_state, ground_m = car.ground()
+
+            # A hole ahead is the one hazard neither the forward sensor nor the
+            # camera can see. If the downward sensor is fitted and reports one,
+            # treat it exactly like a wall: stop and back away immediately.
+            if ground_state == 'hole':
+                print(f"\n!! HOLE detected ahead ({ground_m:.2f} m) - backing off")
+                car.stop(); time.sleep(0.05)
+                car.wheels(-0.6, -0.6); time.sleep(0.5)
+                car.pivot(search_dir); time.sleep(0.7)
+                car.stop()
+                search_dir *= -1
+                continue
+
             if dist <= STOP_DISTANCE:
                 car.stop(); time.sleep(0.05)
                 car.wheels(-0.55, -0.55); time.sleep(0.4)
@@ -142,7 +226,8 @@ def run(mission_path):
             rgb = cam.capture_array()
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             d = terrain.decide_steering(bgr, keepout_bias=stage.keepout_bias)
-            surface = identify_surface(d['mix'], mis.zones)
+            # Vote over several frames so one puddle/shadow cannot skip a stage
+            surface = voter.update(identify_surface(d['mix'], mis.zones))
 
             marker = None
             if stage.exit_marker:
@@ -150,8 +235,15 @@ def run(mission_path):
                 if hit:
                     marker = stage.exit_marker
 
+            # ORB landmark matching -- throttled, it is expensive on a Pi 3B+
+            if book is not None and stage.exit_landmark \
+                    and frame_no % LANDMARK_EVERY == 0:
+                hit = book.match(bgr)
+                landmark = hit[0] if hit else None
+
             # ---------- MISSION ----------
             _, advanced, reason = mis.update(surface=surface, marker=marker,
+                                             landmark=landmark,
                                              distance_m=dist)
             if advanced:
                 print(f"\n-> EXIT {stage.name} ({reason})")
@@ -171,6 +263,20 @@ def run(mission_path):
                 car.pivot(+1, stage.speed)
             elif stage.behaviour == 'straight':
                 car.drive(0.0, speed)
+            elif stage.behaviour == 'cross_step':
+                # Crossing a kerb / slab edge / ramp.
+                #   1. aim for the easiest crossing point (if one is visible)
+                #   2. SQUARE UP -- never take a step at an angle, or one wheel
+                #      lifts first and the car slews sideways and beaches
+                #   3. burst across with momentum; creeping stalls on the riser
+                cs, info = steps.crossing_steer(bgr)
+                if not steps.squared_up(cs):
+                    car.drive(cs, MIN_SPEED)          # line up slowly
+                else:
+                    car.drive(0.0, stage.burst_speed)  # commit, straight
+                print(f"{mis.progress()} {stage.name:16s} CROSSING "
+                      f"step={info['step_found']} aim={cs:+.2f} "
+                      f"t={mis.elapsed():4.1f}s", end="\r")
             elif not d['drivable']:
                 # Vegetation/wall fills the view -> never charge it.
                 car.stop()

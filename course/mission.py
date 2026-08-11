@@ -70,6 +70,10 @@ class Stage:
         self.speed = float(spec.get('speed', 0.55))
         self.exit = spec.get('exit', {})
         self.keepout_bias = float(spec.get('keepout_bias', 0.0))
+        # Speed used to punch across a step/ramp in the `cross_step` behaviour.
+        # Higher than cruising speed on purpose: a step is cleared with
+        # momentum, whereas creeping stalls with the wheel against the riser.
+        self.burst_speed = float(spec.get('burst_speed', 0.85))
         self.notes = spec.get('notes', '')
         # exit conditions
         self.exit_surface = self.exit.get('surface')

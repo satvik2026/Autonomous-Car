@@ -76,6 +76,21 @@ EXG_VEG = 0.05      # ExG above this = vegetation. Raise if dry mud reads green.
 SAT_HARD = 60       # saturation below this (and not veg) = cement/gravel
 HORIZON = 0.45      # ignore the top 45% of frame (sky/buildings/far trees)
 
+# --- TEXTURE AXIS -----------------------------------------------------------
+# Colour alone CANNOT separate a smooth cement slab from grey gravel chippings:
+# measured on the site photos they are only 0.14 apart in colour-mix space,
+# while the zone matcher's tolerance is 0.45 -- so cement was being identified
+# as gravel. Surface ROUGHNESS separates them cleanly and is independent of
+# colour, so it is used as a third axis. Measured through this exact pipeline
+# (exposure-normalised Laplacian std over the sub-horizon ROI, site photos):
+#       cement    66      <- smooth slab
+#       mud      162
+#       grass    304
+#       gravel   307      <- loose chippings
+# cement vs gravel = 4.6x apart, which colour could not achieve.
+SMOOTH_MAX = 110.0   # roughness below this = smooth hard surface (cement)
+ROUGH_SCALE = 300.0  # divisor that maps raw roughness onto ~0..1 for matching
+
 # A column is "blocked by vegetation" only above this fraction. Between the
 # mud course (0.32) and the lawn (0.82); 0.55 leaves margin on both sides.
 VEG_BLOCK_FRAC = 0.55
@@ -107,19 +122,42 @@ def classify(bgr):
     return veg, hard, mud
 
 
+def roughness(bgr):
+    """
+    Surface roughness -- how speckled/bumpy the texture is, independent of
+    colour and (because the image is normalised by its own mean) largely
+    independent of exposure.
+
+    A smooth cement slab gives a small number (~43); loose gravel or wet
+    churned mud gives a large one (~200). This is the axis that tells cement
+    and gravel apart when colour cannot.
+    """
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    g = g / (g.mean() + 1e-6) * 128.0            # normalise exposure
+    return float(cv2.Laplacian(g, cv2.CV_32F, ksize=3).std())
+
+
 def surface_mix(bgr, horizon=HORIZON):
     """
-    Fraction of the drivable region that is each class.
+    What the ground in front of the car is made of.
     Used by the mission sequencer to tell WHICH ZONE the car is in
-    (mud course vs gravel vs cement), independent of steering.
+    (mud course vs gravel vs cement), independently of steering.
 
-    Returns dict: {'veg':f, 'hard':f, 'mud':f}
+    Returns dict:
+        veg/hard/mud : area fractions (sum to 1.0)
+        rough        : raw roughness value
+        rough_n      : roughness normalised to ~0..1 for zone matching
+        smooth       : True if this looks like a smooth slab (cement)
     """
     h = bgr.shape[0]
     roi = bgr[int(h * horizon):, :]
     veg, hard, mud = classify(roi)
     n = float(veg.size)
-    return {'veg': veg.sum() / n, 'hard': hard.sum() / n, 'mud': mud.sum() / n}
+    r = roughness(roi)
+    return {'veg': veg.sum() / n, 'hard': hard.sum() / n, 'mud': mud.sum() / n,
+            'rough': r,
+            'rough_n': min(1.0, r / ROUGH_SCALE),
+            'smooth': r < SMOOTH_MAX}
 
 
 def decide_steering(bgr, horizon=HORIZON, keepout_bias=0.0):

@@ -22,11 +22,18 @@
     "always on one known side, e.g. grass embankment always on the right."
   ],
 
+  "_zones_note": [
+    "MEASURED from the site photos, not guessed. rough_n is the texture axis",
+    "(0=glass-smooth, 1=very rough): it is what separates the smooth cement",
+    "slab from grey gravel chippings, which colour alone cannot do.",
+    "Re-measure for your own conditions with:",
+    "    python3 tools/calibrate_terrain.py ../Photos"
+  ],
   "zones": {
-    "mud":    {"veg": 0.15, "hard": 0.20, "mud": 0.65},
-    "gravel": {"veg": 0.07, "hard": 0.87, "mud": 0.06},
-    "cement": {"veg": 0.02, "hard": 0.94, "mud": 0.04},
-    "grass":  {"veg": 0.85, "hard": 0.08, "mud": 0.07}
+    "mud":    {"veg": 0.02, "hard": 0.16, "mud": 0.73, "rough_n": 0.54},
+    "gravel": {"veg": 0.04, "hard": 0.86, "mud": 0.10, "rough_n": 1.00},
+    "cement": {"veg": 0.00, "hard": 0.98, "mud": 0.02, "rough_n": 0.22},
+    "grass":  {"veg": 0.87, "hard": 0.06, "mud": 0.07, "rough_n": 1.00}
   },
 
   "stages": [
@@ -66,6 +73,14 @@
       "speed": 0.70,
       "notes": "Loose gravel - low traction, wheels sink. Slow + high torque. Surface reads ~0.87 hard / low saturation.",
       "exit": {"surface": "cement", "hold_s": 1.5, "timeout_s": 30, "min_time_s": 3}
+    },
+    {
+      "name": "cross_onto_cement",
+      "behaviour": "cross_step",
+      "speed": 0.55,
+      "burst_speed": 0.90,
+      "notes": "The dirt-to-cement edge. It is a sharp 6-10cm lip in places (Photos/IMG20260729132039.jpg) and nearly flush in others (Photos/IMG20260729132145.jpg) - the SAME edge. The car squares up first, then bursts across with momentum. Keep this stage SHORT; if it times out the car simply carries on.",
+      "exit": {"surface": "cement", "hold_s": 1.0, "timeout_s": 12, "min_time_s": 1}
     },
     {
       "name": "cement_run",
