@@ -26,12 +26,18 @@ step is there. Two things are used for that instead:
      your route order. The mission sequencer puts the car into a `cross_step`
      stage as it approaches. The car does not need to discover the step; it
      needs to cross it well.
-  2. A DOWNWARD-ANGLED ULTRASONIC (optional, ~2 USD, recommended). Pointed at
-     the ground ahead, its range *shortens* at a step up and *lengthens* at a
-     drop or a hole. That is a direct physical measurement of exactly the thing
-     the camera cannot see -- and it is also the only sensor that can see the
-     compost pit, which is a hole. Enable with DOWN_SENSOR_ENABLED in
-     course_navigator.py.
+  2. A DOWNWARD-ANGLED ULTRASONIC (~2 USD, and this is the one upgrade that
+     buys a sense the car does not otherwise have). Pointed at the ground
+     ahead, its range *shortens* at a step up and *lengthens* -- or goes
+     silent -- at a drop or a hole. That is a direct physical measurement of
+     exactly the thing the camera cannot see, and it is also the only sensor
+     that can see the compost pit, which is a hole.
+
+     It has to go on a short mast, about 20 cm up and 35 degrees down, NOT on
+     the front wall of the chassis: at 3 cm height it looks 11 cm ahead and
+     sits in its own blind spot. docs/WIRING.md section 2b has the geometry;
+     tools/calibrate_ground.py prints it for your build. Then set
+     DOWN_SENSOR_ENABLED in course_navigator.py.
 
 WHAT THIS MODULE *DOES* DO -- and this part is validated
 --------------------------------------------------------

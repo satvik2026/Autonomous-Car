@@ -4,7 +4,7 @@ mission.py -- the course SEQUENCER (the Q3 answer).
 HOW YOU BUILD A ROUTE ORDER WITHOUT GPS
 =======================================
 Your example was:
-    "first the entire mud course, then U-turn and tackle the sloped hills,
+    "first the entire mud course, then turn and tackle the sloped hills,
      avoid the big compost pit, then enter the gravel pit and cross it to
      drive on the cement, then onto the football court OR the cement path."
 
@@ -30,19 +30,27 @@ WHAT THE CAR CAN SENSE (and therefore what an exit test may use)
   surface     the terrain mix from the camera:  mud / hard / gravel / veg
               (measured, robust: mud court 0.90 mud; gravel 0.87 hard;
                cement 0.94 hard; lawn 0.82 veg)
-  landmark    a coloured marker or an ORB landmark (vision/landmarks.py)
+  landmark    a colour cue or an ORB landmark (vision/landmarks.py). Nothing is
+              placed on the course, so these are objects that happen to be
+              there already -- useful, but never the only way out of a stage
   timeout     seconds elapsed in the stage  -- the universal fallback
   distance    ultrasonic range (e.g. "wall ahead within 60 cm" = end of court)
+  ground      with the downward sensor fitted: 'flat' / 'step' / 'hole'
   blocked     the terrain classifier says no drivable column exists
 
 DELIBERATE LIMITATION, STATED HONESTLY
 --------------------------------------
-Without an IMU/compass the car cannot know its heading, so "U-turn" cannot be
-"rotate exactly 180 degrees". It is executed as "pivot for N seconds", which is
-open-loop and will drift a few degrees run to run. If you want a repeatable
-U-turn, add a cheap MPU-6050 IMU (~2 USD) and the turn becomes closed-loop.
-Everything else in the sequence is closed-loop on the camera and does not need
-it. This is flagged again in docs/COURSE_ANALYSIS.md.
+The car has no compass, so a turn cannot be "rotate exactly N degrees". It is
+executed as "pivot for N seconds", which is open-loop and drifts with grip and
+battery charge.
+
+That matters far less for the simple ~90 degree turn this route uses than it
+did for a half turn: the error is roughly proportional to the angle, so a
+quarter turn inherits about a quarter of the drift, and the `follow` stage that
+comes next immediately steers on the camera and washes the rest out. An IMU
+would make it exact, but it is not needed for a turn this size. What IS needed
+is re-timing the pivot on the day's surface -- see the stage notes in
+missions/demo_course.json.
 
 RESULT: what you actually see when it runs
 ------------------------------------------

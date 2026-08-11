@@ -113,7 +113,16 @@ place), `straight`.
 Exits: `surface`, `marker`, `landmark`, `obstacle_within_m`, `timeout_s`.
 
 **Always leave a `timeout_s` on every stage** so a missed transition can never
-hang the run.
+hang the run. This matters more here than in most projects: nothing is placed
+on the course, so `marker` can only ever refer to something that happens to be
+standing there (the green compost sacks, the blue toilets) — treat it as a
+bonus exit, never the only one.
+
+Timed pivots (`pivot_left` / `pivot_right`) are open loop, so **re-time them on
+the day's surface**: pivot for 5 s at the stage speed, count the turns, divide.
+Grip and battery charge both change the rate. The route uses a simple ~90°
+turn, where a few degrees of drift is washed out by the next `follow` stage —
+that is why no IMU is needed.
 
 ---
 
@@ -127,11 +136,29 @@ python3 tools/capture_landmark.py --list
 Then use `"exit": {"landmark": "compost_pit"}` in your mission. Capture at
 **car camera height, in demo-day light** — this matters more than anything else.
 
-**Second (downward) ultrasonic** — optional but recommended. It is the only
-sensor that can see the compost pit, because a pit is a *hole* and a
-forward-facing sensor reads "all clear" over it. Wire a second HC-SR04 to
-GPIO 27 (trig) / 22 (echo), then set `DOWN_SENSOR_ENABLED = True` at the top of
-`course_navigator.py`.
+**Second (downward) ultrasonic** — the one upgrade that adds a sense the car
+does not otherwise have. It is the only sensor that can see the compost pit,
+because a pit is a *hole* and a forward-facing sensor reads "all clear" over
+it. It also detects the cement lip, which no camera can.
+
+**It goes on a short mast, ~20 cm up and 35° down — not on the front wall.**
+At 3 cm height it looks 11 cm ahead and sits in its own blind spot. The front
+wall is for the camera and the forward sensor, side by side.
+
+```bash
+python3 course/tools/calibrate_ground.py --geometry   # bench: pick the mount
+python3 course/tools/calibrate_ground.py --measure    # on site: get the numbers
+python3 course/tools/calibrate_ground.py --watch      # walk it to the pit edge
+```
+
+Wire it to GPIO 27 (trig) / 22 (echo) **with its own divider**, paste the
+measured numbers in, then set `DOWN_SENSOR_ENABLED = True` at the top of
+`course_navigator.py`. Full detail in `WIRING.md` §2b.
+
+The mount buys about **0.5 s of warning**, so the pit stage runs at speed 0.50
+— fast enough to climb, slow enough that the car can still stop. Without the
+sensor, nothing on the car detects the pit at all; the mission falls back to
+`keepout_bias` and a wide berth, which is open loop.
 
 ---
 
@@ -140,7 +167,11 @@ GPIO 27 (trig) / 22 (echo), then set `DOWN_SENSOR_ENABLED = True` at the top of
 - [ ] Power bank charged; **separate** motor battery charged
 - [ ] All grounds tied together (Pi ↔ L298N ↔ battery −)
 - [ ] `5V-EN` jumper on each L298N; `ENA/ENB` jumpers **removed** (else no speed control)
-- [ ] HC-SR04 **ECHO through the 1 kΩ/2 kΩ divider** (Pi is 3.3 V)
+- [ ] HC-SR04 **ECHO through the 1 kΩ/2 kΩ divider** (Pi is 3.3 V) — **one
+      divider per sensor** if the ground sensor is fitted
+- [ ] Ground sensor mast **rigid** and calibrated today (`--measure`, then
+      `--watch` at the pit edge); dropouts under ~10 %
+- [ ] Pivot stages **re-timed on today's surface**
 - [ ] Camera ribbon seated; `libcamera-hello --list-cameras` works
 - [ ] Wheels-off bench test passed
 - [ ] Calibrated on site, in today's light; overlay checked
@@ -180,10 +211,11 @@ the car would do for each one.
 | `mission.py` | `Stage` and `Mission` classes: the route sequencer, exit tests, stage log. |
 | `missions/demo_course.json` | The route order, the measured zone signatures, and per-stage notes. **This is the file you edit.** |
 | `vision/terrain.py` | Terrain classifier: ExG vegetation index, saturation, roughness. Column scoring and steering. |
-| `vision/landmarks.py` | Colour markers, ORB `LandmarkBook`, zone matching with confidence margin, `ZoneVoter`. |
+| `vision/landmarks.py` | Colour cues, ORB `LandmarkBook`, zone matching with confidence margin, `ZoneVoter`. |
 | `vision/steps.py` | Step/ramp crossing-point search, with an honest account of what one camera cannot do. |
 | `tools/calibrate_terrain.py` | On-site threshold tuning. |
 | `tools/capture_landmark.py` | Register landmark views for recognition. |
+| `tools/calibrate_ground.py` | Downward-sensor mount geometry, flat-ground calibration, live step/hole watch. |
 
 ### Documentation (`docs/`)
 | File | What it contains |

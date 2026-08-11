@@ -42,14 +42,21 @@ Tier 2  ORB FEATURE LANDMARKS (this file)
         count plus geometric consistency (RANSAC homography) before declaring
         a match, so a chance similarity cannot trigger a turn.
 
-Tier 3  COLOURED FIDUCIAL MARKERS (recommended for demo day)
-        The single most reliable option, and cheap: put a few brightly
-        coloured markers (or printed ArUco tags) at the decision points.
-        The course already contains bright-green compost sacks and blue
-        portable toilets that act as natural high-saturation landmarks --
-        see Photos/IMG20260728133102.jpg. Detection is a colour-blob test:
-        near-100% reliable, unaffected by viewpoint, and takes ~1 ms.
-        If the demo rules allow placing markers, DO THIS.
+Tier 3  COLOUR CUES FROM WHAT IS ALREADY THERE
+        Detecting a big saturated colour blob is the most reliable trick
+        available -- ~1 ms, viewpoint-independent, and it does not care about
+        exposure. The catch: NOTHING MAY BE PLACED ON THIS COURSE, so this
+        tier is limited to objects that happen to be there anyway. Two are
+        usable: the bright-green compost sacks flanking the pit and the blue
+        portable toilets along the trail (Photos/IMG20260728133102.jpg).
+
+        The difference from a placed marker is not detection quality, it is
+        CONTROL. A marker goes exactly where the decision point is and stays
+        put; the sacks are where somebody left them, may be moved between now
+        and demo day, and are only in frame from certain approach angles. So
+        a colour cue here is a BONUS EXIT, never the only one: every stage
+        that uses one also carries a timeout, and the surface signature
+        (Tier 1) stays the workhorse.
 
 SAFETY RULE THAT MAKES ANY OF THIS SAFE
 ---------------------------------------
@@ -68,22 +75,25 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Tier 3 -- coloured fiducial markers (most reliable)
+# Tier 3 -- colour cues from objects already on the course
 # ---------------------------------------------------------------------------
-# HSV ranges for saturated marker colours. Tune with tools/calibrate_terrain.py.
+# HSV ranges. Tune with tools/calibrate_terrain.py, on the day, in the day's
+# light -- a green sack in overcast is not the same green as in full sun.
+#
+# Both entries are things that are ALREADY on the course. There is no entry for
+# a cone or a tag because nothing may be placed: if you add a key here, it has
+# to be for something that will be standing there on demo day regardless.
 MARKER_COLOURS = {
-    # the bright-green compost sacks already on site
+    # the bright-green compost sacks flanking the pit
     'green_sack': ((40, 120, 60), (85, 255, 255)),
     # blue portable toilets / blue doors seen along the trail
     'blue_object': ((95, 120, 60), (125, 255, 255)),
-    # add your own: e.g. a pink/orange cone placed at a decision point
-    'pink_marker': ((160, 120, 90), (175, 255, 255)),
 }
 
 
 def detect_marker(bgr, name, min_area_frac=0.004):
     """
-    Detect a coloured marker blob.
+    Detect a large blob of one of the MARKER_COLOURS.
 
     Returns None, or dict(area_frac, cx, side) where cx is the blob centre in
     normalised image x (-1 left .. +1 right) -- so you can react to WHICH SIDE
