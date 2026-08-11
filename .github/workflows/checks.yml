@@ -27,11 +27,23 @@
 
 name: checks
 
+# Triggers are deliberately NOT `push: ['**']` plus `pull_request`. That pair
+# runs the whole suite twice on every commit of an open PR -- once for the push
+# to the branch, once for the PR -- which is pure waste. Work on this repo goes
+# branch -> PR -> main, so: PRs are checked on every update (against the merge
+# result, which is what actually lands), and main is checked on push. The
+# trade-off is that a branch with no PR open yet gets no CI; open the PR, or
+# run it by hand from the Actions tab.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# A new push supersedes the run already in flight for the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   checks:
