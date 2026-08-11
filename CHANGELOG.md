@@ -238,6 +238,103 @@ also detects the compost pit — a hole reads as ground suddenly further away.
 
 ---
 
+## Stage 8 — Three constraints resolved
+
+Three open questions from Stage 7 came back with answers, and each one changed
+the design rather than just the wording.
+
+### 1. A simple turn, not a U-turn
+
+The half turn was only ever an example. The route now uses a **~90° turn**
+(`turn_to_slopes`, 1.3 s), and that removes the IMU from the recommended
+hardware list.
+
+The reasoning is worth keeping: open-loop pivot error scales roughly with the
+angle, so a quarter turn inherits about half the drift of a half turn, and the
+`follow` stage that comes next steers on the camera and absorbs the rest within
+a metre. An IMU would make the turn exact, but exact is not required at this
+angle. **Re-timing the pivot on the day's surface still is** — grip and battery
+charge move the turn rate, so the docs now give the procedure (pivot 5 s, count
+turns, divide) instead of implying 1.3 s is a constant.
+
+### 2. Nothing may be placed on the course
+
+Placed markers were previously the top-rated exit test — "if the rules allow
+it, do this". The rules do not allow it, so Tier 3 was **demoted, not deleted**.
+
+What survives: the bright-green compost sacks and the blue toilets are already
+on site, and colour-blob detection of them is as reliable as ever. What is lost
+is *control* — nobody chose where they are, they may be moved before demo day,
+and they are only in frame from some angles. So a colour cue is now documented
+and used as a **bonus exit, always behind a timeout**, and the surface
+signature is unambiguously the workhorse. `pink_marker` (a placed cone) was
+removed from `MARKER_COLOURS`, since leaving it there implied an option that
+does not exist.
+
+Second-order effect: with no marker available to pick the final branch,
+`cement_run` chooses the pathway by `keepout_bias` alone, which the stage notes
+now say plainly rather than suggesting a marker.
+
+### 3. The downward ultrasonic: necessary, and the obvious mount fails
+
+**Necessary?** Not to complete the route — but with markers off the table,
+every other defence around the compost pit is route context. The car drives
+past where it was *told* the pit is, without ever sensing it. This sensor is
+the only layer that detects the hole itself, so it is now recommended outright
+rather than "optional".
+
+**The mount was the real question,** and the intuitive answer is wrong. Bolted
+to the 2–3 cm front lip beside the camera, a downward sensor reads 4.2 cm on
+flat ground — inside its own ~2 cm blind spot — and watches a patch 11 cm ahead
+of the wheels, which at any usable speed arrives before the car could stop.
+The geometry (`h/sin t` slant, `h/tan t` ahead) says the fix is **height**:
+~20 cm up, 35° down, watching 25 cm ahead. The front wall stays as the user
+described it — forward sensor and camera, side by side.
+
+Two field realities came out of working this through, and both changed the code:
+
+- **Chassis pitch is the noise floor.** The reading moves with tilt angle, so
+  bouncing swings it ~2 cm per ±5°, against 7.8 cm of signal from a 6 cm step.
+  A single-frame trigger would fabricate holes on rough ground. `Car.ground()`
+  is now **debounced over 3 consecutive frames**; the previous version acted on
+  one reading.
+- **A missing echo means the same as a long one.** A deep pit scatters the beam
+  and returns nothing — which gpiozero reports as `max_distance`, and so does a
+  grazing beam off soft mud. Both are now read as `hole`: a needless stop costs
+  seconds, the pit costs the run. Calibration reports the dropout rate, because
+  the fix for too many is mechanical (steepen the tilt), not a threshold tweak.
+
+The mount also implies a **speed limit** — warning distance ÷ the ~0.5 s to
+confirm and stop, so ~0.5 m/s at the recommended geometry. That is a mission
+decision, not a global cap (capping every stage would stall the car on the
+climb), so `avoid_compost_pit` drops to speed 0.50 with the reason in its notes.
+
+Finally, `'step'` stopped being dead code: `cross_step` now **holds the burst
+until the ground actually reads short**, which is the one thing the camera
+provably cannot tell it (Stage 7, Defect C). Without the sensor fitted it falls
+back to the old behaviour.
+
+### Created
+- `course/tools/calibrate_ground.py` — mount geometry at the bench
+  (`--geometry`), flat-ground calibration on site (`--measure`), live step/hole
+  classification (`--watch`)
+
+### Changed
+- `course_navigator.py` — mount constants, debounced `ground()`, no-echo
+  handling, sensor-armed step burst, startup line that states plainly when
+  nothing on the car can see the pit
+- `missions/demo_course.json` — `u_turn` → `turn_to_slopes`, pit stage slowed,
+  notes rewritten for the no-markers constraint
+- `mission.py`, `vision/landmarks.py`, `vision/steps.py` — docstrings match the
+  constraints; `pink_marker` removed
+- `docs/WIRING.md` — new §2b: mount geometry, sketch, second divider, pins
+- `docs/COURSE_ANALYSIS.md` — timed-turn section rewritten, colour cues
+  demoted in the exit-test table, new "Fitting the ground sensor" section
+- `docs/DEMO_DAY.md`, `docs/EXPLAINED_SIMPLY.md` — same three changes in
+  checklist and plain-language form
+
+---
+
 ## Themes across the project
 
 - **Measure, don't assume.** Every significant change came from testing against
@@ -251,6 +348,11 @@ also detects the compost pit — a hole reads as ground suddenly further away.
   can only advance a stage — it can never steer the car.
 - **Keep the hardware swappable.** One pin layout across all three motor
   drivers, so hardware can change without touching code.
-- **State limits plainly.** The timed U-turn drifts; the TB6612 carries less
-  current than an L298N; a camera cannot see a 6 cm step. Each is written down
-  next to the thing it affects.
+- **State limits plainly.** The timed turn drifts; the TB6612 carries less
+  current than an L298N; a camera cannot see a 6 cm step; a ground sensor on
+  the front lip sees 11 cm ahead. Each is written down next to the thing it
+  affects.
+- **Check the geometry before the wiring.** The downward sensor would have been
+  wired perfectly and still been useless in its obvious mounting position. A
+  few lines of trigonometry, run before drilling, is the cheapest test in the
+  project.

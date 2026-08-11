@@ -1,7 +1,7 @@
 {
   "_comment": [
     "EXAMPLE MISSION -- edit this file to define YOUR route order.",
-    "This encodes the sequence you described: mud course -> U-turn -> slopes",
+    "This encodes the sequence you described: mud course -> turn -> slopes",
     "-> avoid compost pit -> gravel -> cement -> choose court or pathway.",
     "",
     "Each stage = behaviour + exit test + guards. Behaviours:",
@@ -13,7 +13,10 @@
     "",
     "Exit tests (first one that fires wins; timeout_s is the safety net):",
     "  surface: mud|gravel|cement|grass   + hold_s   (must persist)",
-    "  marker : name from vision/landmarks.MARKER_COLOURS",
+    "  marker : name from vision/landmarks.MARKER_COLOURS. NOTHING IS PLACED",
+    "           ON THE COURSE -- these are colour cues from objects already",
+    "           there (the green compost sacks, the blue toilets), so treat",
+    "           them as a bonus and always leave a timeout_s behind them.",
     "  landmark: name registered in the LandmarkBook",
     "  obstacle_within_m: ultrasonic distance",
     "  timeout_s: seconds",
@@ -46,11 +49,11 @@
       "exit": {"obstacle_within_m": 0.5, "timeout_s": 60, "min_time_s": 5}
     },
     {
-      "name": "u_turn",
+      "name": "turn_to_slopes",
       "behaviour": "pivot_left",
       "speed": 0.55,
-      "notes": "OPEN-LOOP timed pivot - drifts a few degrees per run. Add an MPU-6050 IMU to make this closed-loop and repeatable.",
-      "exit": {"timeout_s": 2.6, "min_time_s": 2.0}
+      "notes": "A SIMPLE ~90 deg turn, not a U-turn. Open-loop timed pivot: error scales with the angle, so a quarter turn drifts about a quarter as much as a half turn did, and the next stage steers on the camera anyway - no IMU needed. CALIBRATE THE TIME ON THE DAY'S SURFACE: pivot for 5 s at speed 0.55, count the turns, divide. 1.3 s assumes ~70 deg/s, which is what the old 2.6 s half-turn implied. Grip and battery charge both change it, so re-time it on site.",
+      "exit": {"timeout_s": 1.3, "min_time_s": 1.0}
     },
     {
       "name": "slopes",
@@ -62,9 +65,9 @@
     {
       "name": "avoid_compost_pit",
       "behaviour": "follow",
-      "speed": 0.55,
+      "speed": 0.50,
       "keepout_bias": 0.25,
-      "notes": "The compost pit is an EXCAVATED HOLE (Photos/IMG20260728133107.jpg) - a negative obstacle the ultrasonic sensor CANNOT see. It is flanked by bright-green sacks. Bias right, and use the green_sack marker to confirm we are alongside it.",
+      "notes": "The compost pit is an EXCAVATED HOLE (Photos/IMG20260728133107.jpg) - a negative obstacle the FORWARD ultrasonic cannot see and the camera cannot see either. Defence in depth: bias right for the whole stage, exit on the bright-green sacks that flank the pit (they are already on site - nothing is placed), and fall back to the timeout. THE SPEED IS DELIBERATELY LOW: with the downward sensor fitted, this is the stage where its ~0.5 s of warning has to be enough, and speed 0.50 keeps the car inside it. Without that sensor nothing detects the pit at all and the bias plus a wide berth are all you have.",
       "exit": {"marker": "green_sack", "timeout_s": 25, "min_time_s": 3}
     },
     {
@@ -79,14 +82,14 @@
       "behaviour": "cross_step",
       "speed": 0.55,
       "burst_speed": 0.90,
-      "notes": "The dirt-to-cement edge. It is a sharp 6-10cm lip in places (Photos/IMG20260729132039.jpg) and nearly flush in others (Photos/IMG20260729132145.jpg) - the SAME edge. The car squares up first, then bursts across with momentum. Keep this stage SHORT; if it times out the car simply carries on.",
+      "notes": "The dirt-to-cement edge. It is a sharp 6-10cm lip in places (Photos/IMG20260729132039.jpg) and nearly flush in others (Photos/IMG20260729132145.jpg) - the SAME edge. The car squares up first, then bursts across with momentum. With the downward sensor fitted the burst waits until the ground actually reads short, i.e. until the lip is really there; without it the car bursts as soon as it is squared up, because no camera can see a 6cm step. Keep this stage SHORT; if it times out the car simply carries on.",
       "exit": {"surface": "cement", "hold_s": 1.0, "timeout_s": 12, "min_time_s": 1}
     },
     {
       "name": "cement_run",
       "behaviour": "follow",
       "speed": 0.60,
-      "notes": "On the cement apron/pathway. Final stage - choose the pathway rather than the court by biasing away from the court edge, or split this into two stages with a marker to pick the branch.",
+      "notes": "On the cement apron/pathway. Final stage - choose the pathway rather than the court by biasing away from the court edge (keepout_bias), since with nothing placed on the course there is no marker to pick the branch with. If the two branches differ underfoot, a surface exit can split them; otherwise this is an open-loop choice and the bias is what makes it.",
       "exit": {"timeout_s": 40, "min_time_s": 5}
     }
   ]

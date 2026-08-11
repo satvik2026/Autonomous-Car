@@ -44,19 +44,39 @@ LEFT_FWD, LEFT_BWD, LEFT_EN = 5, 6, 12
 RIGHT_FWD, RIGHT_BWD, RIGHT_EN = 20, 21, 13
 TRIG_PIN, ECHO_PIN = 23, 24
 
-# OPTIONAL second ultrasonic, angled DOWN at the ground ahead. Off by default
-# so the car runs on the hardware you already have.
+# SECOND ultrasonic, angled DOWN at the ground ahead. Off by default so the car
+# runs on the hardware you already have; turn it on once the sensor is fitted.
 #
 # Why it is worth adding (~2 USD, 2 spare GPIO): it is the only sensor that can
 # see the two things that will actually end your run --
 #   * a STEP: the ground range suddenly SHORTENS
-#   * a HOLE (the compost pit): the ground range suddenly LENGTHENS. A
-#     forward-facing sensor reads "all clear" over a pit right up until the
-#     car drives into it, and the camera cannot see it either.
+#   * a HOLE (the compost pit): the ground range suddenly LENGTHENS, or the
+#     echo vanishes altogether. A forward-facing sensor reads "all clear" over
+#     a pit right up until the car drives into it, and the camera cannot see it
+#     either (vision/steps.py has the measurements).
+#
+# IT MUST GO ON A SHORT MAST, NOT ON THE FRONT WALL OF THE CHASSIS. A sensor
+# 3 cm off the ground looks at a patch 11 cm ahead and sits in its own 2 cm
+# blind spot -- useless. ~20 cm up and 35 deg down looks 25 cm ahead of the
+# wheels, which is 0.5 s of warning at 0.5 m/s. See docs/WIRING.md section 2b,
+# and run tools/calibrate_ground.py --geometry before drilling anything.
 DOWN_SENSOR_ENABLED = False
 DOWN_TRIG_PIN, DOWN_ECHO_PIN = 27, 22
-DOWN_NOMINAL_M = 0.25      # expected ground range on flat ground -- calibrate
-DOWN_TOLERANCE = 0.08      # deviation beyond this = step (short) or hole (long)
+DOWN_MOUNT_H_M = 0.20      # sensor height above flat ground -- YOUR build
+DOWN_TILT_DEG = 35         # degrees below horizontal -- YOUR build
+DOWN_NOMINAL_M = 0.26      # flat-ground reading. MEASURE IT:
+                           #   tools/calibrate_ground.py --measure
+DOWN_TOLERANCE = 0.05      # deviation beyond this = step (short) or hole (long)
+DOWN_MAX_M = 1.0           # DistanceSensor ceiling; a reading at it = no echo
+DOWN_CONFIRM_FRAMES = 3    # consecutive bad frames before believing step/hole
+
+# The mount buys a fixed WARNING DISTANCE, so it implies a speed limit: at
+# 20 cm / 35 deg the car must be under ~0.5 m/s or it reaches the pit before it
+# can confirm the reading and stop. That limit is in m/s and stage `speed` is a
+# throttle fraction, so the two cannot be compared in code. Measure the mapping
+# once -- drive 2 m on the flat at speed 0.55 and time it -- then set the pit
+# stage's speed in the mission file accordingly. It is a mission decision, not
+# a global cap: capping every stage would stall the car on the climb.
 
 STOP_DISTANCE = 0.30
 SLOW_DISTANCE = 0.60
@@ -79,9 +99,10 @@ class Car:
         self.sensor = DistanceSensor(echo=ECHO_PIN, trigger=TRIG_PIN,
                                      max_distance=2.0)
         self.down = None
+        self._down_raw, self._down_streak, self._down_state = 'flat', 0, 'flat'
         if DOWN_SENSOR_ENABLED:
             self.down = DistanceSensor(echo=DOWN_ECHO_PIN, trigger=DOWN_TRIG_PIN,
-                                       max_distance=1.0)
+                                       max_distance=DOWN_MAX_M)
 
     def wheels(self, l, r):
         l = float(np.clip(l, -1, 1))
@@ -114,19 +135,47 @@ class Car:
 
     def ground(self):
         """
-        Read the downward sensor. Returns (state, range_m):
+        Read the downward sensor, debounced. Returns (state, range_m):
             'flat' | 'step' (ground closer than expected)
-                   | 'hole' (ground further -- a pit or drop-off)
+                   | 'hole' (ground further, or no echo at all)
                    | None   (sensor not fitted)
+
+        NO ECHO IS TREATED AS A HOLE. A deep pit scatters the beam and often
+        returns nothing, which gpiozero reports as max_distance -- so silence
+        and "ground a long way down" are the same reading, and both mean stop.
+        A dropped echo off soft mud looks identical, so this errs toward
+        stopping: a needless stop costs seconds, the pit costs the run. If the
+        calibration tool shows more than ~10% dropouts on flat ground, steepen
+        the tilt rather than loosening this.
+
+        DEBOUNCED because the loudest noise source is the car itself: pitching
+        over rough ground swings the tilt angle, and the reading swings with it
+        (~2 cm per 5 deg at the recommended mount). DOWN_CONFIRM_FRAMES
+        consecutive bad frames are required before the emergency stop fires, so
+        one bounce cannot trigger it. Recovery is not debounced -- a single
+        good frame clears the state, because by then the car has already
+        stopped and backed off. Switching between two BAD states holds the
+        older one until the new one confirms ('hole' for a frame or two as a
+        step comes up); both mean stop, so that is the safe way round.
         """
         if self.down is None:
             return None, None
         d = self.down.distance
-        if d < DOWN_NOMINAL_M - DOWN_TOLERANCE:
-            return 'step', d
-        if d > DOWN_NOMINAL_M + DOWN_TOLERANCE:
-            return 'hole', d
-        return 'flat', d
+
+        if d >= DOWN_MAX_M - 0.02:
+            raw = 'hole'                                   # no echo came back
+        elif d < DOWN_NOMINAL_M - DOWN_TOLERANCE:
+            raw = 'step'
+        elif d > DOWN_NOMINAL_M + DOWN_TOLERANCE:
+            raw = 'hole'
+        else:
+            raw = 'flat'
+
+        self._down_streak = self._down_streak + 1 if raw == self._down_raw else 1
+        self._down_raw = raw
+        if raw == 'flat' or self._down_streak >= DOWN_CONFIRM_FRAMES:
+            self._down_state = raw
+        return self._down_state, d
 
 
 def open_camera():
@@ -188,10 +237,19 @@ def run(mission_path):
     search_dir = 1
     frame_no = 0
     landmark = None
+    burst_armed = False        # cross_step: has the ground sensor seen the lip?
 
     print(f"Course navigator: {len(mis.stages)} stages. Ctrl-C to stop.")
     if car.down is not None:
-        print("Downward ground sensor: ENABLED")
+        print(f"Downward ground sensor: ENABLED -- mounted {DOWN_MOUNT_H_M*100:.0f} cm "
+              f"up, {DOWN_TILT_DEG:.0f} deg down, flat = "
+              f"{DOWN_NOMINAL_M*100:.0f}+-{DOWN_TOLERANCE*100:.0f} cm, "
+              f"confirmed over {DOWN_CONFIRM_FRAMES} frames")
+    else:
+        print("Downward ground sensor: NOT FITTED -- nothing on this car can "
+              "see the compost pit.\n  The pit is handled by route context "
+              "alone (keepout_bias + the green sacks + a timeout), which is "
+              "open-loop.\n  Give it a wide berth.")
     try:
         while not mis.finished:
             t0 = time.monotonic()
@@ -203,10 +261,12 @@ def run(mission_path):
             ground_state, ground_m = car.ground()
 
             # A hole ahead is the one hazard neither the forward sensor nor the
-            # camera can see. If the downward sensor is fitted and reports one,
-            # treat it exactly like a wall: stop and back away immediately.
+            # camera can see. If the downward sensor is fitted and reports one
+            # for DOWN_CONFIRM_FRAMES running, treat it exactly like a wall:
+            # stop and back away immediately.
             if ground_state == 'hole':
-                print(f"\n!! HOLE detected ahead ({ground_m:.2f} m) - backing off")
+                print(f"\n!! HOLE detected ahead ({ground_m:.2f} m vs "
+                      f"{DOWN_NOMINAL_M:.2f} m flat) - backing off")
                 car.stop(); time.sleep(0.05)
                 car.wheels(-0.6, -0.6); time.sleep(0.5)
                 car.pivot(search_dir); time.sleep(0.7)
@@ -247,6 +307,7 @@ def run(mission_path):
                                              distance_m=dist)
             if advanced:
                 print(f"\n-> EXIT {stage.name} ({reason})")
+                burst_armed = False
                 car.stop(); time.sleep(0.2)
                 continue
 
@@ -269,13 +330,26 @@ def run(mission_path):
                 #   2. SQUARE UP -- never take a step at an angle, or one wheel
                 #      lifts first and the car slews sideways and beaches
                 #   3. burst across with momentum; creeping stalls on the riser
+                #
+                # WHEN the burst fires matters, and the camera cannot tell you:
+                # it cannot see a 6 cm step at all (vision/steps.py). With the
+                # downward sensor fitted, the step IS visible -- the ground
+                # reads short -- so hold the burst until then and cross with
+                # momentum exactly where it counts. Without it, fall back to
+                # bursting as soon as the car is squared up, which is the old
+                # behaviour and means most of the stage is spent at full tilt.
                 cs, info = steps.crossing_steer(bgr)
+                if ground_state == 'step':
+                    burst_armed = True
+                ready = burst_armed or car.down is None
                 if not steps.squared_up(cs):
                     car.drive(cs, MIN_SPEED)          # line up slowly
-                else:
+                elif ready:
                     car.drive(0.0, stage.burst_speed)  # commit, straight
+                else:
+                    car.drive(0.0, MIN_SPEED)          # creep up to the lip
                 print(f"{mis.progress()} {stage.name:16s} CROSSING "
-                      f"step={info['step_found']} aim={cs:+.2f} "
+                      f"armed={burst_armed} aim={cs:+.2f} "
                       f"t={mis.elapsed():4.1f}s", end="\r")
             elif not d['drivable']:
                 # Vegetation/wall fills the view -> never charge it.

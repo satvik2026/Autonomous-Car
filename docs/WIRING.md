@@ -99,6 +99,100 @@ you only need to get these four wires right.)*
 
 ---
 
+## 2b. Second HC-SR04 — the downward ground sensor
+
+This is the sensor that sees the compost pit. A pit is a **hole**, and a
+forward-facing sensor reads "all clear" over a hole right up until the car
+falls in; the camera cannot see it either. Pointed down at the ground ahead,
+the range **shortens** over a step and **lengthens — or goes silent —** over a
+hole.
+
+### Where it goes: NOT on the front wall
+
+The front wall of the chassis is right for the forward sensor and the camera,
+side by side as you have them. It is wrong for this one, and the reason is
+geometry, not wiring.
+
+A sensor `h` above the ground tilted `t` below horizontal meets the ground at
+slant range `h / sin(t)`, which is `h / tan(t)` in front of it. Bolted to a
+3 cm lip:
+
+| Mount | Reads on flat | Ground patch ahead of the wheels | Verdict |
+|---|---|---|---|
+| Front wall, 3 cm, 30° | 4.2 cm | 11 cm | **No** — inside the sensor's own ~2 cm blind spot |
+| Front wall, 3 cm, 45° | 3.5 cm | 10 cm | **No** — same |
+| Mast, 20 cm, 35° | 26 cm | 25 cm | Yes — 0.5 s of warning at 0.5 m/s |
+| Mast, 25 cm, 30° | 35 cm | 33 cm | Yes — 0.66 m/s |
+
+Generate this table for your own build, before drilling:
+
+```bash
+python3 course/tools/calibrate_ground.py --geometry
+python3 course/tools/calibrate_ground.py --height 0.22 --tilt 35
+```
+
+### The mount
+
+```
+              ultrasonic, face tilted 35° down
+                    ╲  ┌────┐
+                     ╲ │ () │  ← 20 cm above the ground
+                      ╲└────┘
+            mast ──────┐ ╲                     rigid: a floppy mast
+         (20 cm)       │  ╲  35°               turns every bump into
+                       │   ╲                   a false hole
+   ┌───────────────────┴┐   ╲
+   │  chassis            │    ╲
+   │            [cam][US]│     ╲   ← front wall: camera + FORWARD sensor,
+   └──o───────────────o──┘      ╲    side by side, both level
+                                 ╲
+   ═══════════════════════════════●═══════════  ground
+                                  ↑
+                     25 cm ahead of the front wheels
+```
+
+- **Height 20–25 cm.** Height buys warning distance *and* cuts pitch
+  sensitivity — go as high as the chassis will carry **rigidly**.
+- **Tilt 30–35°.** Shallower looks further ahead but skims off soft mud and
+  rides the pitch noise; steeper is quiet and reliable but gives less warning.
+- **As far forward as possible.** Every cm the mast sits ahead of the front
+  wheels is a free cm of warning distance.
+- **Rigid.** Chassis pitch is the dominant noise source: ±5° of pitch moves
+  the reading ~2 cm at this mount. A wobbling mast fabricates holes. Bolt or
+  glue it — do not zip-tie it to something springy.
+- **Point it away from the forward sensor's cone** (35° down vs level does
+  this already) so the two do not hear each other's pings.
+
+### Wiring — identical to the first sensor, including the divider
+
+| HC-SR04 pin | Connects to |
+|---|---|
+| VCC | Pi **5V [phys 2/4]** |
+| GND | Pi **GND** (common) |
+| TRIG | Pi **GPIO27 [phys 13]** |
+| ECHO | **Its own 1 kΩ/2 kΩ divider → Pi GPIO22 [phys 15]** |
+
+> ⚠️ The second ECHO needs its **own** divider. Do not tee both sensors into
+> one — they will load each other and you will read garbage from both.
+
+### Then calibrate it
+
+```bash
+python3 course/tools/calibrate_ground.py --measure   # on flat ground
+python3 course/tools/calibrate_ground.py --watch     # walk it to the step/pit
+```
+
+Paste the printed `DOWN_NOMINAL_M` / `DOWN_TOLERANCE` into
+`course/course_navigator.py` and set `DOWN_SENSOR_ENABLED = True`. Never guess
+these numbers — mud, gravel and cement do not answer the same way, and the
+value depends on your exact mount.
+
+If `--measure` reports more than ~10 % dropouts, **steepen the tilt**. A
+grazing beam scatters off soft ground instead of coming back, and the navigator
+reads a missing echo as a hole — so dropouts cost you false emergency stops.
+
+---
+
 ## 3. (Optional) IR backup obstacle module
 
 Only if you set `USE_IR_BACKUP = True` in `autonomous_car.py`.
@@ -158,9 +252,11 @@ and verify with `libcamera-hello --list-cameras`.
 | GPIO13 | 33 | out (PWM) | L293D EN2 (right speed) |
 | GPIO20 | 38 | out | L293D IN3 (right dir A) |
 | GPIO21 | 40 | out | L293D IN4 (right dir B) |
-| GPIO23 | 16 | out | HC-SR04 TRIG |
-| GPIO24 | 18 | in | HC-SR04 ECHO (via divider) |
+| GPIO23 | 16 | out | HC-SR04 (forward) TRIG |
+| GPIO24 | 18 | in | HC-SR04 (forward) ECHO (via divider) |
+| GPIO27 | 13 | out | HC-SR04 (downward) TRIG |
+| GPIO22 | 15 | in | HC-SR04 (downward) ECHO (via its own divider) |
 | GPIO25 | 22 | in | (optional) IR OUT |
-| 5V | 2, 4 | pwr | L293D VCC1, HC-SR04 VCC |
+| 5V | 2, 4 | pwr | L293D VCC1, both HC-SR04 VCC |
 | GND | 6, 9, 14, 20, 25, 30, 34, 39 | gnd | common ground |
 | CSI | — | — | camera ribbon |

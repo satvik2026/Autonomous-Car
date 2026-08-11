@@ -161,14 +161,14 @@ one ask:
 
 > *"When this part is over, what changes under the wheels?"*
 
-That is your finishing condition. If nothing changes, put a marker there, or
-just use a time limit.
+That is your finishing condition. If nothing changes, use a time limit — you
+cannot put anything out on this course, so a time limit is the fallback.
 
 Your example becomes:
 
 1. **Mud course** — follow the open ground, leaning away from the grass bank.
    Ends when something is close ahead.
-2. **U-turn** — spin on the spot.
+2. **Turn** — a quarter turn on the spot, towards the slopes.
 3. **Slopes** — climb, with extra power.
 4. **Past the compost pit** — lean away from it; ends when the green sacks
    come into view.
@@ -186,7 +186,7 @@ A running commentary as it goes:
 ```
 [1/7] mud_course        surf=mud    steer=-0.12   t=12.4s
 -> EXIT mud_course (obstacle within 0.5m)
-[2/7] u_turn            ...
+[2/7] turn_to_slopes    ...
 ```
 
 and at the end, a summary of how long each part took and what ended it. When
@@ -194,11 +194,18 @@ something goes wrong, you will know exactly which step and why.
 
 ### The one weak point
 
-The U-turn is **timed**, not measured — the car has no compass, so it spins for
-a set number of seconds. It will be a few degrees different each run, and
-battery level and grip change it. Two options: end the turn on something the
-car can *see* instead of a timer, or add a small £2 motion sensor and make the
-turn properly accurate. Everything else in the sequence is self-correcting.
+The turn is **timed**, not measured — the car has no compass, so it spins for a
+set number of seconds and will be a few degrees different each run.
+
+The good news is that a **quarter turn is far more forgiving than a half
+turn**: the error grows with the angle, so it is roughly halved, and the step
+that follows steers on the camera and straightens things out within a metre.
+No motion sensor needed for a turn this size.
+
+What you *do* need to do is time it on the day. Let it spin for five seconds on
+the surface you will run on, count the turns, and work out the seconds per
+quarter turn. Grip and battery charge both change the answer, so do it on the
+day rather than trusting the number in the file.
 
 ---
 
@@ -298,14 +305,17 @@ seen, and correctly refused to match the cement, the lawn or the mud court —
 no false alarms, which is the property that matters. It also missed one view
 it had not been trained on, which is exactly why you record several.
 
-**Level 3 — put markers out. This is the best option, and the cheapest.**
-A few brightly coloured cones or printed tags at your decision points are
-recognised almost perfectly, from any angle, in any light. Your course even has
-natural ones: the **bright green compost sacks** sit right where you need a
-decision, and the blue portable toilets mark the trail.
+**Level 3 — spot the brightly coloured things that are already there.**
+A big patch of a strong colour is recognised almost perfectly, from any angle,
+in any light. You cannot put cones or tags out on this course, but two things
+are standing there anyway: the **bright green compost sacks**, right where you
+need a decision, and the blue portable toilets along the trail.
 
-If the rules let you place markers, **do that**. It turns the hardest part of
-the problem into the easiest.
+The catch is not the spotting — that part is easy and reliable. It is that you
+did not choose where they are, they might be moved before the day, and they are
+only in view from certain angles. So they are treated as a **bonus**: if the
+sacks are seen, the step ends early; if not, the time limit ends it. Never let
+a step depend on them alone.
 
 ### The safety rule that makes all of this safe
 
@@ -322,13 +332,24 @@ The pit is a **hole**, and this deserves emphasis: a forward-pointing distance
 sensor sees **nothing at all** over a hole. It reads "all clear" right up to
 the moment the car drives in. The camera cannot see into it either.
 
-So use three defences at once:
+So use several defences at once:
 
 1. Steer away from that side for the whole step,
-2. Use the **green sacks** as the marker that you are alongside it,
-3. Ideally add the small downward-pointing sensor — over a hole the ground
-   suddenly reads *further away*, which is a dead giveaway and the only
-   genuinely reliable detection.
+2. Go slowly through it,
+3. Use the **green sacks** as the sign that you are alongside it,
+4. Keep a time limit behind the sacks, in case they have been moved,
+5. **Add the small downward-pointing sensor** — over a hole the ground suddenly
+   reads *further away*, or the echo does not come back at all. This is the
+   only genuinely reliable detection, and the only one of the five that senses
+   the pit rather than assuming where it is.
+
+**Fit it on a small mast, about 20 cm up, tilted about 35° down** — not on the
+front lip of the chassis next to the camera. Down at 3 cm it would be looking
+at a patch of ground 11 cm in front of the car, which arrives before the car
+could possibly stop, and that is too close for the sensor to measure anyway.
+Up on a mast it watches a patch about 25 cm ahead, which at a gentle speed is
+roughly half a second of warning. Keep the mast **stiff**: if it wobbles, every
+bump looks like a hole.
 
 ---
 
@@ -340,4 +361,4 @@ So use three defences at once:
 | Steps and ramps? | Seek the flush crossing, hit it straight, use momentum — and fit bigger wheels. |
 | Route order? | A recipe of steps, each ending on something the car can actually sense. |
 | Camera and direction? | It scores left/middle/right and crosses out anything that is mostly plants; keep-out is per-step, so climbing a grassy slope is still allowed when that is the job. |
-| Saved pictures? | Match surfaces and features, not pixels — and put markers out if you can. |
+| Saved pictures? | Match surfaces and features, not pixels — and treat the coloured things already on site as a bonus, never the only cue. |

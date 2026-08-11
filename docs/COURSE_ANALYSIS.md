@@ -34,8 +34,11 @@ These are the ones that will actually end your run, so they get their own list:
 
 1. **The compost pit is a hole.** An ultrasonic sensor pointed forward sees
    *nothing* over a pit — it reads "clear" right up until the car drives in.
-   This is a **negative obstacle** and needs a vision/marker rule, not a range
-   rule. This is the single most important safety item on the course.
+   This is a **negative obstacle**: a forward range rule cannot help, and one
+   camera cannot measure depth either. The only sensor that detects it
+   directly is a **downward-angled second ultrasonic** (§ "Fitting the ground
+   sensor"). Without one, the pit is handled by route context alone. This is
+   the single most important safety item on the course.
 2. **Garden hose** lying across the ground in `IMG20260728121844`, `121851`,
    `122036`. It's ~2 cm — below the sensor's cone but tall enough to beach a
    small car or wrap a wheel. Sweep the course before the run.
@@ -247,7 +250,7 @@ slopes*, there's a ramp or flush crossing. In `terrain.py` terms:
 ## The concept: a route is a list of *stages*, not a map
 
 You have no GPS, so a route cannot be coordinates. But your example —
-*"mud course → U-turn → slopes → avoid compost → gravel → cement → court or
+*"mud course → turn → slopes → avoid compost → gravel → cement → court or
 path"* — is already the right structure. Each item is a **stage**, and each
 stage is exactly three things:
 
@@ -266,10 +269,18 @@ reliably tell mud from gravel from cement from grass.
 | Sensor | Exit test | Reliability |
 |---|---|---|
 | **Surface signature** (camera) | "gravel held for 1.5 s" | **High** — the workhorse |
-| **Coloured marker** | "green sack seen" | **Highest** if you place markers |
 | **Ultrasonic** | "wall within 0.5 m" | High — good for end-of-court |
 | **Timeout** | "40 s elapsed" | Always available — the safety net |
+| **Colour cue** | "green sack seen" | Medium — detection is near-perfect, but nothing may be placed, so it depends on an object being where you last saw it |
+| **Ground sensor** (downward) | "hole ahead" | High, if fitted — the only pit detector |
 | ORB landmark | "building corner recognised" | Medium (see Q5) |
+
+Note what moved: **colour cues are no longer the top row.** Placing markers is
+off the table for this course, so the only coloured objects available are ones
+that happen to be standing there — the green compost sacks, the blue toilets.
+The *detection* is still near-100 %; what you lose is control over where they
+are and whether they are still there on the day. That demotes them from
+"primary exit test" to "bonus exit, always backed by a timeout".
 
 Note the **`hold_s`** requirement: a surface must persist (e.g. 1.5 s) before
 it advances the mission, so one frame of grey puddle doesn't get mistaken for
@@ -293,7 +304,8 @@ Edit `course/missions/demo_course.json` — no Python needed:
 Method:
 1. **Walk the course** and write the stages in order, in plain words.
 2. For each, ask **"what changes under the wheels when this stage ends?"** →
-   that's your exit test. If nothing changes, use a marker or a timeout.
+   that's your exit test. If nothing changes, fall back to a timeout (and add
+   a colour cue in front of it if a suitable object happens to be there).
 3. Pick the behaviour (follow / creep for rough / pivot for turns).
 4. Set `keepout_bias` if a hazard is always on one known side.
 5. **Always set `timeout_s`** so a missed transition can't hang the run.
@@ -303,45 +315,61 @@ Your example encodes as (already written in the mission file):
 | # | Stage | Behaviour | Exits when |
 |---|---|---|---|
 | 1 | `mud_course` | follow, bias left (bank on right) | wall within 0.5 m *or* 60 s |
-| 2 | `u_turn` | pivot left | 2.6 s elapsed |
+| 2 | `turn_to_slopes` | pivot left | 1.3 s elapsed (~90°) |
 | 3 | `slopes` | creep, speed 0.75 | surface = gravel |
-| 4 | `avoid_compost_pit` | follow, bias **right** | green sack marker seen |
+| 4 | `avoid_compost_pit` | follow, bias **right**, slow | green sacks seen *or* 25 s |
 | 5 | `gravel_crossing` | creep | surface = cement |
-| 6 | `cement_run` | follow | 40 s |
+| 6 | `cross_onto_cement` | square up, burst | surface = cement *or* 12 s |
+| 7 | `cement_run` | follow | 40 s |
 
 ## What the result looks like
 
 ```
-[1/6] mud_course        surf=mud    veg=0.31 steer=-0.12 d=142.3cm t= 12.4s
-[1/6] mud_course        surf=mud    veg=0.29 steer=+0.05 d= 96.1cm t= 13.4s
+[1/7] mud_course        surf=mud    veg=0.31 steer=-0.12 d=142.3cm t= 12.4s
+[1/7] mud_course        surf=mud    veg=0.29 steer=+0.05 d= 96.1cm t= 13.4s
 -> EXIT mud_course (obstacle within 0.5m)
-[2/6] u_turn            surf=mud    veg=0.30 steer=+0.00 d=180.0cm t=  0.4s
--> EXIT u_turn (timeout 2.6s)
-[3/6] slopes            surf=None   veg=0.44 steer=-0.31 d=155.2cm t=  6.1s
+[2/7] turn_to_slopes    surf=mud    veg=0.30 steer=+0.00 d=180.0cm t=  0.4s
+-> EXIT turn_to_slopes (timeout 1.3s)
+[3/7] slopes            surf=None   veg=0.44 steer=-0.31 d=155.2cm t=  6.1s
 -> EXIT slopes (surface==gravel held 1.5s)
 ...
 MISSION COMPLETE
   mud_course            41.2s  (obstacle within 0.5m)
-  u_turn                 2.6s  (timeout 2.6s)
+  turn_to_slopes         1.3s  (timeout 1.3s)
   slopes                18.7s  (surface==gravel held 1.5s)
 ```
 
 You get a live stage trace during the run and a transition log afterwards —
 so when something goes wrong you know *exactly* which stage and which test.
 
-## Honest limitation: the U-turn
+## Honest limitation: the timed turn
 
-Without an IMU/compass the car doesn't know its heading, so a U-turn is a
-**timed open-loop pivot** — it will drift a few degrees per run and the drift
-changes with surface grip and battery charge. Two options:
+The car has no compass, so a turn is a **timed open-loop pivot** — it drifts,
+and the drift changes with surface grip and battery charge.
 
-- **Free fix:** end the U-turn on a *sensed* condition instead of time (pivot
-  until the camera sees the mud court fill the frame again).
-- **Proper fix (~2 USD):** add an **MPU-6050 IMU**; the turn becomes
-  closed-loop ("rotate until yaw changes 180°") and repeatable. Strongly
-  recommended if the demo depends on the U-turn landing accurately.
+**How much this matters depends entirely on the angle**, which is why the route
+now uses a **simple ~90° turn** rather than a half turn. The error is roughly
+proportional to the angle: if the pivot rate is off by 10 %, a 180° turn lands
+18° out, while a 90° turn lands 9° out. And what happens next is not "hope" —
+the following stage is `follow`, which steers on the camera, so a heading error
+of that size is corrected within a metre of driving. A 90° turn is comfortably
+inside what the next stage can absorb.
 
-Everything else in the sequence closes the loop on the camera and needs no IMU.
+So: **no IMU is needed for this route.** What *is* needed is re-timing the
+pivot on the day:
+
+```
+pivot for 5 s at the stage speed, count the turns, divide
+```
+
+The mission ships 1.3 s at speed 0.55, which assumes ~70°/s. That is a starting
+point, not a measurement — grip on wet mud differs from dry, and a flat battery
+turns slower than a fresh one. Re-time it on site and edit `timeout_s`.
+
+If you later need a turn to land precisely (a tight gap, a half turn), the two
+fixes still stand: end the pivot on a *sensed* condition instead of time, or
+add an **MPU-6050 IMU** (~2 USD) and close the loop on yaw. Neither is required
+at 90°.
 
 ---
 
@@ -468,15 +496,20 @@ rotation- and scale-invariant and far more lighting-tolerant. Require a high
 inlier count **plus RANSAC geometric consistency**, so a chance resemblance
 can't trigger a turn. Register 3–6 views per landmark **at car-camera height**.
 
-**Tier 3 — Coloured fiducial markers (best, and cheapest).** Put a few bright
-markers (or printed ArUco tags) at your decision points. Detection is a colour
-blob test: ~100 % reliable, viewpoint-independent, ~1 ms.
-**Your course already has natural ones** — the bright-green compost sacks
-(`IMG20260728133102`) sit right at the compost pit, and blue portable toilets
-mark the trail. `MARKER_COLOURS` in `landmarks.py` already includes both.
+**Tier 3 — Colour cues from what is already there.** Detecting a big saturated
+colour blob is ~100 % reliable, viewpoint-independent and takes ~1 ms. Placed
+markers would be the ideal version of this — but **nothing may be placed on
+this course**, so the tier is limited to objects that will be standing there
+anyway: the bright-green compost sacks at the pit (`IMG20260728133102`) and the
+blue portable toilets along the trail. `MARKER_COLOURS` in `landmarks.py`
+carries exactly those two.
 
-> If demo rules permit placing markers, **do this**. It converts the hardest
-> part of the problem (knowing where you are) into the easiest.
+> What you lose without placed markers is not detection quality — it is
+> **control**. A marker goes precisely at the decision point and stays put; a
+> sack is where somebody left it, might be moved before demo day, and is only
+> in frame from certain angles. So a colour cue is a **bonus exit test, never
+> the only one**: every stage using one also carries a `timeout_s`, and the
+> surface signature (Tier 1) stays the workhorse.
 
 ### Does it help with ordering? Yes — that's exactly what it's for
 
@@ -489,9 +522,10 @@ Landmarks are how a stage *ends*. In the mission file:
 ```
 
 The car follows the open surface, biased right (away from the pit), and when
-the green sacks appear it advances to `gravel_crossing`. That is precisely your
-"when the compost pit frame is registered, turn right" — implemented in a form
-that survives real lighting and viewpoint.
+the green sacks appear it advances to `gravel_crossing` — or the timeout does
+it. That is precisely your "when the compost pit frame is registered, turn
+right" — implemented in a form that survives real lighting and viewpoint, with
+a fallback for the day the sacks have been moved.
 
 ### The safety rule that makes this safe
 
@@ -506,10 +540,59 @@ Because the pit is a **hole**, don't rely on detecting the pit itself. Use
 **defence in depth**:
 
 1. `keepout_bias` steering away from it for the whole stage,
-2. the **green sacks** as a positive marker that you're alongside it,
-3. optionally a **downward-angled second ultrasonic** — over a hole its range
-   suddenly *increases*, which is a reliable negative-obstacle detector and the
-   only sensor that truly sees a pit.
+2. a **low stage speed** (0.50), so the car stays inside the warning distance
+   the ground sensor can actually give it,
+3. the **green sacks** as a positive cue that you're alongside it,
+4. a **timeout** behind the sacks, in case they've moved,
+5. the **downward-angled second ultrasonic** — over a hole its range suddenly
+   increases or the echo vanishes. This is the only layer that senses the pit
+   itself rather than inferring it from the route.
+
+Without layer 5, layers 1–4 are all route context: the car never knows the pit
+is there, it just drives past where you told it the pit would be.
+
+## Fitting the ground sensor
+
+**Is it necessary?** Strictly, no — the car completes the route without it, on
+route context alone. But with markers off the table, layers 1–4 above are all
+open-loop, and the pit is the one hazard on this course that ends the run
+outright. It is ~2 USD and two spare GPIO for the only closed-loop detection of
+that hazard, so: fit it.
+
+**Where it goes is the part that decides whether it works.** The intuitive
+mounting point — the 2–3 cm lip on the front wall, beside the camera — fails on
+geometry. A sensor `h` above the ground tilted `t` below horizontal meets the
+ground at slant range `h/sin(t)`, i.e. `h/tan(t)` in front of itself:
+
+| Mount | Reads flat | Ground ahead of wheels | Speed limit | Verdict |
+|---|---|---|---|---|
+| Front wall, 3 cm, 30° | 4.2 cm | 11 cm | 0.22 m/s | **No** — inside its own ~2 cm blind spot |
+| Mast, 15 cm, 30° | 21 cm | 23 cm | 0.46 m/s | Workable |
+| **Mast, 20 cm, 35°** | **26 cm** | **25 cm** | **0.50 m/s** | **Recommended** |
+| Mast, 25 cm, 30° | 35 cm | 33 cm | 0.66 m/s | Better, if it stays rigid |
+
+Reproduce for your own build with
+`python3 course/tools/calibrate_ground.py --geometry`.
+
+Three things that decide whether it works in the field:
+
+- **Height, not angle, is the lever.** Height buys warning distance *and*
+  reduces pitch sensitivity. Go as high as the chassis will carry rigidly.
+- **Chassis pitch is the noise floor.** The reading moves with the tilt angle,
+  so bouncing over rough ground swings it — about 2 cm per ±5° at the
+  recommended mount, against a 7.8 cm signal from a 6 cm step. That is why the
+  mount must be *rigid* and why the navigator requires three consecutive bad
+  frames before it believes a hole.
+- **A missing echo means the same thing as a long one.** A grazing beam
+  scatters off soft mud and returns nothing; so does a deep pit. The code
+  treats both as "hole" — stopping needlessly is cheap. If flat-ground
+  calibration shows >10 % dropouts, steepen the tilt.
+
+The mount implies a **speed limit**: warning distance ÷ the ~0.5 s the car
+needs to confirm the reading and stop. At the recommended mount that is
+~0.5 m/s, which is why the pit stage runs slower than the rest of the route.
+
+Wiring, the mount sketch and calibration steps: `WIRING.md` §2b.
 
 ---
 
@@ -523,8 +606,12 @@ Because the pit is a **hole**, don't rely on detecting the pit itself. Use
    mechanical improvement for steps and grass.
 3. **Use the 4WD + 2×L298N build**, and a **7.2 V NiMH / 2S Li-ion** pack, not
    the 9 V battery (see `docs/DRIVER_MOSFET_REPORT.md`).
-4. **Place coloured markers** at decision points if allowed.
-5. **Add an MPU-6050** if the U-turn must be accurate.
+4. **Fit the downward ground sensor** on a rigid ~20 cm mast, 35° down, then
+   calibrate it on site (`tools/calibrate_ground.py --measure`). Nothing may be
+   placed on the course, so this is the only sensor that will ever detect the
+   compost pit.
+5. **Re-time the pivot stage** on the day's surface. The ~90° turn needs no
+   IMU, but it does need today's turn rate.
 6. **Walk the course and clear the hoses.**
 7. **Dry-run first:** `python3 course_navigator.py --replay ../Photos` — runs
    the real decision code on your photos, no hardware needed.
