@@ -1,13 +1,23 @@
 # Autonomous Off-Road Car — Raspberry Pi 3B+
 
-A skid-steer (tank-drive) autonomous car that drives on a wide, rough path,
-avoids obstacles with a distance sensor, and uses a camera to stay on the
-drivable ground — **without** wandering onto the grassy hill or into the
-building.
+A skid-steer (tank-drive) autonomous car that runs a **known sequence of
+outdoor terrain** — mud, slope, gravel, cement — using a camera to stay on the
+drivable ground, an ultrasonic sensor to avoid collisions, and a small
+finite-state "mission" to move through the course in order. It steers by
+vision, sequences by the terrain under its wheels, and never needs GPS.
 
-> **Read this whole README before wiring anything or running code.** There are
-> a few places where your parts list will fight physics (a 9 V battery driving
-> four motors uphill, an L293D's current limit). Those are called out in
+The project grew in two halves, and both are in the repo:
+
+- **Starter programs** (repo root) — two small scripts to prove the hardware
+  and the basic camera-steering idea. Build these first.
+- **The course navigation system** (`course/`) — the real deliverable: a
+  two-axis terrain classifier, a mission sequencer, landmark/colour cues, step
+  crossing, and an optional downward ground sensor that sees holes. This is
+  what runs the demo course end to end.
+
+> **Read this whole README before wiring anything or running code.** A couple
+> of places in a typical parts list fight physics (a 9 V battery driving four
+> motors uphill, an L293D's current limit). Those are called out in
 > **[Hardware reality check](#hardware-reality-check)** with cheap fixes.
 
 ---
@@ -15,427 +25,405 @@ building.
 ## Contents
 
 - [What's in this repo](#whats-in-this-repo)
-- [How the car works (the big picture)](#how-the-car-works-the-big-picture)
-- [Your four questions, answered](#your-four-questions-answered)
-  1. [How the camera alters the car's direction](#1-how-the-camera-alters-the-cars-direction)
-  2. [IR vs. ultrasonic sensing](#2-ir-vs-ultrasonic-sensing)
-  3. [Uploading code, OS choice, and powering the Pi](#3-uploading-code-os-choice-and-powering-the-pi)
-  4. [GPS / GPX routes — do you need them?](#4-gps--gpx-routes--do-you-need-them)
-- [How the "don't drive onto the hill or into the building" logic works](#how-the-dont-drive-onto-the-hill-or-into-the-building-logic-works)
+- [The three decision layers](#the-three-decision-layers)
+- [The course as a sequence of stages](#the-course-as-a-sequence-of-stages)
+- [Seeing the ground: the two-axis terrain model](#seeing-the-ground-the-two-axis-terrain-model)
+- [Knowing where you are without GPS](#knowing-where-you-are-without-gps)
+- [The downward ground sensor (holes and steps)](#the-downward-ground-sensor-holes-and-steps)
+- [Sensing: IR vs. ultrasonic](#sensing-ir-vs-ultrasonic)
+- [Software, OS, and powering the Pi](#software-os-and-powering-the-pi)
 - [Hardware reality check](#hardware-reality-check)
 - [Pinout & wiring](#pinout--wiring)
-- [Software setup](#software-setup)
-- [Running the two programs](#running-the-two-programs)
-- [Tuning the vision on-site](#tuning-the-vision-on-site)
+- [Setup](#setup)
+- [Running it](#running-it)
+- [Calibrating on-site](#calibrating-on-site)
+- [Tests & CI](#tests--ci)
+- [Where to read next](#where-to-read-next)
 
 ---
 
 ## What's in this repo
 
+**Starter programs (repo root) — prove the hardware first**
+
 | File | What it is |
 |---|---|
-| `simple_obstacle_avoider.py` | **Program 1** — bare-bones demo. Drives forward, and when the ultrasonic sensor sees something close, it stops, backs up, and turns. No camera, no route. Use this first to prove your motors, driver, and sensor are wired correctly. |
-| `autonomous_car.py` | **Program 2** — the full project. Ultrasonic sensor as the reflex/safety layer **plus** the camera choosing which way to steer so the car stays on the path and off the hill/building. |
-| `docs/pinout.svg` | Pinout & wiring diagram (open in a browser). |
-| `docs/WIRING.md` | Text version of the pinout: every pin, every wire, and the voltage-divider you must not skip. |
-| `requirements.txt` | Python packages to install on the Pi. |
-| `examples/route.gpx` | Example GPX file — only relevant **if** you add a GPS module later (see Q4). |
+| `simple_obstacle_avoider.py` | Drives forward; when the ultrasonic sensor sees something close, it stops, backs up, and turns. No camera, no route. Use it to prove your motors, driver, and sensor are wired correctly. |
+| `autonomous_car.py` | The original full build: ultrasonic reflex layer **plus** a simple hue-based camera steer. Superseded on the real course by `course/` (see the note below), but still the clearest small example of camera-plus-reflex. |
+
+**The course navigation system (`course/`) — the real project**
+
+| File | What it contains |
+|---|---|
+| `course/course_navigator.py` | Main program. Ties the three layers together; `--replay` and `--calibrate` modes. Optional downward ground sensor with hole/step detection. |
+| `course/mission.py` | The route sequencer: `Stage` and `Mission`, exit tests, the stage log. |
+| `course/missions/demo_course.json` | The route order, the measured zone signatures, and per-stage notes. **This is the file you edit to define a route.** |
+| `course/vision/terrain.py` | Two-axis terrain classifier (ExG vegetation + saturation + roughness) and the column-scoring steer. |
+| `course/vision/landmarks.py` | Colour cues, ORB landmark matching, zone matching, and a vote filter. |
+| `course/vision/steps.py` | Where to cross a step or slab edge — with an honest account of what one camera cannot do. |
+| `course/tools/calibrate_terrain.py` | On-site terrain-threshold tuning. |
+| `course/tools/calibrate_ground.py` | Downward-sensor mount geometry, flat-ground calibration, live step/hole watch. |
+| `course/tools/capture_landmark.py` | Register landmark views for recognition. |
+
+**Demos, docs, tests**
+
+| Path | What it is |
+|---|---|
+| `demos/` | Standalone L298N obstacle-avoiders for the Pi and the VEGA ARIES v2.0 board (2WD and 4WD), plus driver pinout diagrams. |
+| `docs/` | The full write-up — see [Where to read next](#where-to-read-next). |
+| `tests/`, `.github/workflows/checks.yml` | The test suite and the CI that runs it. |
+| `examples/route.gpx` | Example GPX — only relevant if you add a GPS module later (see [Knowing where you are without GPS](#knowing-where-you-are-without-gps)). |
+
+> **Which program is "the" car?** For the demo course, it's
+> `course/course_navigator.py`. The root `autonomous_car.py` uses a simpler
+> green-vs-brown colour rule that was measured to fail on the real course (dry
+> lawn reads as drivable, cement is indistinguishable from mud). The `course/`
+> terrain model fixes that — see
+> [the two-axis terrain model](#seeing-the-ground-the-two-axis-terrain-model).
 
 ---
 
-## How the car works (the big picture)
+## The three decision layers
 
-There are **two independent decision layers**, and keeping them separate is the
-whole trick:
+Keeping these separate — and ranked by authority — is the whole trick:
 
 ```
                  ┌──────────────────────────────────────────┐
                  │            CONTROL LOOP (~10 Hz)           │
                  └──────────────────────────────────────────┘
                                   │
-        ┌─────────────────────────┴──────────────────────────┐
-        │                                                     │
-   REFLEX LAYER                                        STRATEGY LAYER
-   (ultrasonic/IR)                                     (camera + OpenCV)
-        │                                                     │
-  "Is something                                       "Which direction keeps
-   right in front                                      me on the drivable
-   of me, NOW?"                                        ground and away from
-        │                                              grass/building?"
-        │ if too close →                                       │
-        ▼ STOP, reverse, turn                                  ▼ pick a steer value
-                                                          -1 (hard left) … +1 (hard right)
-                    │                                          │
-                    └──────────────┬───────────────────────────┘
-                                   ▼
-                        DIFFERENTIAL DRIVE (skid steer)
-              left motors and right motors get different speeds
+   ┌──────────────────────────────┼──────────────────────────────┐
+   │                              │                              │
+ REFLEX                        TERRAIN                        MISSION
+ (ultrasonic)                  (camera + OpenCV)              (sequencer)
+   │                              │                              │
+ "Is something                 "Which way is                 "Which STAGE of
+  right in front                 drivable ground,             the course am I in,
+  of me NOW?"                    and never into               and when do I
+   │                             vegetation."                 advance?"
+   │ if close →                    │ steer −1…+1                 │ pick behaviour,
+   ▼ STOP, reverse, turn           ▼                             ▼ test for exit
+   └───────────────────────────────┴──────────────┬─────────────┘
+                                                   ▼
+                                     DIFFERENTIAL DRIVE (skid steer)
+                              left pair and right pair at different speeds
 ```
 
-- The **reflex layer** is dumb, fast, and always wins. If the distance sensor
-  says "wall 20 cm ahead," the car stops and turns *regardless* of what the
-  camera thinks. This is your collision insurance.
-- The **strategy layer** is the camera. When the path ahead is clear of
-  immediate obstacles, the camera decides *where the drivable route is* and nudges
-  the steering so the car follows the open ground and refuses to climb the
-  grassy hill or drift into the building.
+- **Reflex** is dumb, fast, and always wins. "Wall 25 cm ahead" stops and turns
+  the car regardless of what the camera or mission want. Collision insurance.
+- **Terrain** is the camera. Each frame it produces **one number** — a steer
+  value in `[-1, +1]` — that keeps the most-drivable ground centred and refuses
+  to steer into vegetation. It never sets speed and never commands a manoeuvre.
+- **Mission** is the sequencer. It knows the course is an *ordered list of
+  stages*, picks the behaviour for the current stage (follow / creep / cross a
+  step / pivot), and decides when the stage is done.
 
-**Steering itself** is exactly what you described — *skid steer / differential
-drive*:
+**Layer by authority:** reflex beats terrain; terrain beats mission. A landmark
+or a mission cue can only *advance a stage* — it can never steer the car into
+something. So a misread never becomes a collision.
 
-- Go straight → both sides equal speed.
-- Small correction → drop one side's speed a little (gentle arc).
-- Sharp turn → one side fast forward, other side slow or reversed (pivot).
-
-Because you paired the two left wheels together and the two right wheels
-together, you don't need a steering servo — you steer by making one side
-spin faster than the other, like a tank or a zero-turn mower. This is ideal
-for grass and rough ground.
+**Steering** is skid steer / differential drive: both left wheels ganged, both
+right wheels ganged, no steering servo. Straight = equal speed; gentle arc =
+ease one side; pivot = one side forward, the other slow or reversed. Ideal for
+grass and rough ground.
 
 ---
 
-## Your four questions, answered
+## The course as a sequence of stages
 
-### 1. How the camera alters the car's direction
+There's no GPS and no map. A route here is **not coordinates** — it is an
+ordered list of *stages*, each of which is exactly three things:
 
-The camera never drives the motors directly. It produces **one number** each
-frame: a **steer value** between `-1.0` (turn hard left) and `+1.0` (turn hard
-right), with `0.0` meaning "straight ahead." The motor code turns that number
-into left/right wheel speeds.
-
-Here's the pipeline, frame by frame (all of this is in `autonomous_car.py`,
-function `decide_steering()`):
-
-1. **Grab a frame** from the Pi camera (e.g. 640×480).
-2. **Look only at the ground in front of the car.** We crop away the top of
-   the image (sky, tops of the building, far-away trees) and keep the **bottom
-   ~55%** — the patch of terrain the car is about to drive over. This is called
-   the *region of interest (ROI)*.
-3. **Classify the ground by colour** (in HSV colour space, which is far more
-   robust to sunlight/shadow than RGB):
-   - **Green** → grass / the hill → **avoid**.
-   - **Ground-coloured** (brown dirt, tan, grey gravel — whatever your path is)
-     → **drivable**.
-   - Everything else (building wall, dark shadow) → **not drivable**.
-4. **Split the ROI into three vertical columns:** left, centre, right.
-5. **Score each column** = (fraction of drivable pixels) − (penalty for green
-   pixels). A column full of dirt scores high; a column full of grass or wall
-   scores low.
-6. **Pick the winner and produce the steer value:**
-   - If **centre** is clearly drivable → steer ≈ `0` (go straight).
-   - If the **right** column scores best → positive steer (bear right), with the
-     *size* of the steer proportional to how much better right is than the
-     current heading. A slightly-better right gives a gentle correction; a
-     right that's the only drivable option gives a hard turn.
-   - Same idea mirrored for **left**.
-   - If **no column** is drivable (grass/wall everywhere) → steer stays put and
-     the car slows/stops, letting the reflex layer or a search behaviour take
-     over instead of blindly plowing into the hill.
-
-So the camera *biases* the differential drive: it continuously trims the
-left/right speed balance to keep the most-drivable ground centred in front of
-the car. That's the whole steering-by-camera idea, and it's what implements
-"small deviations by reducing the voltage of one motor" — a small steer value
-maps to a small speed reduction on one side.
-
-> The colour thresholds (what counts as "green" and "ground") **must be tuned
-> at your actual site** under the lighting you'll drive in. See
-> [Tuning the vision on-site](#tuning-the-vision-on-site).
-
-### 2. IR vs. ultrasonic sensing
-
-You listed "ultrasound/infrared" as one undecided sensor. They behave very
-differently. Short version: **use ultrasonic (HC-SR04) as your main distance
-sensor for this outdoor car.** Here's why.
-
-| | **Ultrasonic (e.g. HC-SR04)** | **IR (Sharp analog rangefinder, or a digital IR obstacle module)** |
+| Part | Meaning | Example |
 |---|---|---|
-| **How it senses** | Emits a sound pulse, times the echo → gives an actual **distance** (cm). | Emits IR light, measures reflected intensity/angle. Analog Sharp = distance; cheap digital module = just "something is / isn't within ~2–30 cm." |
-| **Typical range** | ~2 cm – 4 m | Analog Sharp: ~10–80 cm. Digital module: a few cm to ~30 cm, and often not calibrated. |
-| **Gives a real distance?** | **Yes** — you can say "stop at 25 cm." | Analog: yes-ish. Cheap digital module: **no**, just a threshold flag. |
-| **Sunlight** | **Unaffected** (it's sound). | **Badly affected.** Outdoor sun is full of IR; it washes out cheap IR sensors and causes false readings. This alone is a strong reason to avoid IR outdoors. |
-| **Surface colour / material** | Mostly colour-independent. Struggles with sound-absorbing stuff (soft foam, thick grass tips) and very angled/soft surfaces that scatter the echo. | Struggles with dark, matte, or shiny surfaces (they reflect little/odd IR). Grass is a mixed bag. |
-| **Soft grass / uneven ground** | Reads the ground clutter sometimes; mounting height/angle matters. | Even less reliable. |
-| **Field of view** | Wide-ish cone (~15–30°) — good for "is anything ahead," poor for pinpointing. | Narrow beam — more precise angle, shorter reach. |
-| **Cost / wiring** | Cheap; needs a **voltage divider on ECHO** (its output is 5 V, the Pi GPIO is 3.3 V — see wiring). | Cheap; digital module is 1 wire and 3.3 V-friendly. |
-| **Verdict for THIS car** | ✅ Primary obstacle/distance sensor. Real distances + sunlight-proof. | ⚠️ Fine as a cheap *backup* bump-detector, but not your main sensor outdoors. |
+| **Behaviour** | what to do while in this stage | follow / creep / cross_step / pivot |
+| **Exit test** | how the car knows the stage is done | "surface became gravel for 1.5 s" |
+| **Guards** | what must never happen | never enter vegetation; never collide |
 
-**Recommendation:** wire an **HC-SR04 ultrasonic** as the reflex sensor (both
-programs assume this). If you already own a digital IR module, you can add it
-as a redundant close-range trigger — `autonomous_car.py` has a commented
-`USE_IR_BACKUP` hook showing where it would plug in — but don't rely on IR as
-the only sensor in the sun.
+That's a finite-state machine, and it's the right tool because the course is a
+*chain of distinguishable surfaces* the camera can tell apart. The shipped
+example (`course/missions/demo_course.json`) encodes this route:
 
-### 3. Uploading code, OS choice, and powering the Pi
+| # | Stage | Behaviour | Exits when |
+|---|---|---|---|
+| 1 | `mud_course` | follow, bias left (grass bank on the right) | obstacle within 0.5 m *or* 60 s |
+| 2 | `turn_to_slopes` | pivot left (~90°) | 1.3 s elapsed |
+| 3 | `slopes` | creep (more torque for the climb) | surface = gravel |
+| 4 | `avoid_compost_pit` | follow, bias right, **slow** | green sacks seen *or* 25 s |
+| 5 | `gravel_crossing` | creep (low traction) | surface = cement |
+| 6 | `cross_onto_cement` | square up, then burst over the lip | surface = cement *or* 12 s |
+| 7 | `cement_run` | follow to the finish | 40 s |
 
-**Are you using the right OS?** **Yes.** Raspberry Pi OS 64-bit (Bookworm) on
-the Pi 3B+ is correct and current. One important consequence: on 64-bit
-Bookworm the **camera stack is `libcamera` / `picamera2`**, *not* the old
-`picamera` library. This project uses **`picamera2`**, which is the right
-choice for your OS. (If you find a tutorial using `import picamera`, it's for
-the old OS and won't work on yours.)
+You author your own route by editing that JSON — no Python needed. Two rules
+that keep a run safe:
 
-Enable the camera and (if you use the `pigpio` PWM backend) the relevant
-interfaces:
-
-```bash
-sudo raspi-config      # Interface Options → enable Camera (legacy off), I2C/SPI as needed
-# picamera2 + libcamera are preinstalled on 64-bit Bookworm; verify with:
-libcamera-hello --list-cameras
-```
-
-**How do I get the code onto the Pi?** Any of these — easiest first:
-
-1. **`git clone` on the Pi** (best). The Pi is on Wi-Fi, so:
-   ```bash
-   git clone <this-repo-url>
-   cd Autonomous-Car
-   ```
-   To update later: `git pull`.
-2. **`scp` from your laptop** over the network (Pi must have SSH enabled in
-   `raspi-config`):
-   ```bash
-   scp simple_obstacle_avoider.py pi@raspberrypi.local:/home/pi/
-   ```
-   or copy the whole folder: `scp -r Autonomous-Car pi@raspberrypi.local:/home/pi/`
-3. **VS Code Remote-SSH** — edit files live on the Pi from your laptop. Nicest
-   for tuning.
-4. **Sneakernet** — pull the SD card, mount it on your laptop, drop files in
-   `/home/pi/`. Works but slow to iterate.
-
-**Powering the Pi on a moving car with 5 V micro-USB — will a power bank do?**
-**Yes, a USB power bank is exactly the right answer**, and you should power the
-Pi *separately* from the motors. Requirements:
-
-- **Voltage:** 5 V (the Pi 3B+ uses a **micro-USB** power input — matches a
-  standard power bank cable). ✅
-- **Current:** The Pi 3B+ officially wants **5 V / 2.5 A**. Pick a power bank
-  that can output **at least 2.5 A on a single port (3 A is better)**. Many
-  cheap banks claim "2.1 A" — that's marginal; under camera + Wi-Fi load you'll
-  get *under-voltage warnings* (the yellow lightning bolt) and random reboots.
-- **Cable quality matters:** a thin/long micro-USB cable drops voltage. Use a
-  short, thick one.
-- **Keep it separate from the motor battery.** The motors (via the L293D and
-  the 9 V battery) create big voltage spikes and noise. If the Pi shared that
-  supply it would brown-out and reboot the moment the wheels bite into grass.
-  **Power bank → Pi. 9 V battery → motors. Tie their grounds together (common
-  ground) but keep the positive rails separate.** This is the single most
-  common reason a Pi car "randomly resets."
-
-So: **a good 5 V / ≥2.5 A USB power bank with a short micro-USB cable is the
-recommended Pi supply.** (See [Hardware reality check](#hardware-reality-check)
-for the motor-side power, which is the part that actually needs upgrading.)
-
-### 4. GPS / GPX routes — do you need them?
-
-**Short answer: with your current parts list, you neither need nor *can* use a
-GPX route — and that's fine, because your terrain is defined by what it *looks*
-like, not by exact coordinates.**
-
-Why:
-
-- **You have no GPS module.** Nothing in your list can measure the car's
-  latitude/longitude, and nothing can measure heading (you'd want a compass/IMU
-  too). So the car literally cannot know where it is on a map. Uploading start/
-  end coordinates or a `.gpx` route would give the software numbers it has no
-  way to act on.
-- **Your route is a *visual* route, not a *survey* route.** You described the
-  goal as "stay on the wide path, don't climb the little grassy hill, don't go
-  into the building." That's a description of *terrain appearance*, and the
-  camera handles it directly (see the next section). This is more reliable than
-  hobby GPS anyway: a NEO-6M GPS is accurate to only ~2.5 m, which is *wider
-  than your car* — it could happily place you "on route" while you're actually
-  half-on the hill.
-
-**So for this build: no coordinates, no GPX.** The "route" is: *follow the
-drivable ground the camera sees, and let the ultrasonic sensor stop you hitting
-things.*
-
-**If you later add a GPS module** (e.g. a u-blox NEO-6M on the Pi's UART) and
-want true waypoint following, here's how it would work and how you'd load a
-route — this is why `examples/route.gpx` exists and why `autonomous_car.py`
-has an optional, **disabled-by-default** `route` section:
-
-- **You'd upload a GPX**, not just two coordinates. A GPX file is XML listing
-  a sequence of `<trkpt lat=... lon=...>` waypoints — the whole path, not only
-  the ends — so the car can follow the corridor you actually want, not a
-  straight line that might cut across the hill.
-- **How you'd create it:** walk the route with a phone GPS app (e.g. an
-  OSM/GPX tracker), or draw it on a map tool that exports GPX. Drop the file on
-  the Pi (same `git`/`scp` methods as the code).
-- **How the code would use it:** read the GPX → list of waypoints; each loop,
-  read current GPS fix, compute bearing+distance to the next waypoint, convert
-  the bearing error into a steer value, and advance to the next waypoint when
-  you're within a few metres. The camera's obstacle/terrain steering would sit
-  *on top* as an override so you still don't drive into the building even if GPS
-  drifts.
-- `examples/route.gpx` shows the exact file format to follow.
-
-Bottom line: **build and run it vision-only first** (that's what
-`autonomous_car.py` does today). Add GPS/GPX later only if you need to reach a
-specific faraway point that the camera can't see.
+- **Every stage has a `timeout_s`.** It's the universal fallback so a missed
+  cue can never hang the run forever.
+- **Timed pivots are open-loop, so re-time them on the day.** Grip and battery
+  charge change the turn rate. The route deliberately uses a **simple ~90°
+  turn, not a U-turn**: open-loop error scales with the angle, and the `follow`
+  stage that comes next steers on the camera and washes out the few degrees of
+  drift — so **no IMU is needed** for a turn this size.
 
 ---
 
-## How the "don't drive onto the hill or into the building" logic works
+## Seeing the ground: the two-axis terrain model
 
-This is the safety concern you specifically raised, so here it is in one place —
-**this is what the code does, and why it won't climb the hill or hit the
-school.**
+The original green-vs-brown rule (still in root `autonomous_car.py`) was
+measured against real course photos and fails three ways: dry lawn reads as
+drivable, cement is indistinguishable from mud, and wet mud gets refused. Hue
+alone cannot separate these — dry grass sits inside the "ground" hue band, and
+cement sits on top of mud.
 
-The camera classifies the ground in front of the car into three buckets by
-colour, then only ever steers toward the *drivable* bucket:
+`course/vision/terrain.py` fixes it with **two axes**:
 
-1. **Grass / the hill = green.** In HSV, grass has a distinct green hue.
-   Any column of the image that is mostly green is scored as **not drivable and
-   penalised**. The steering is computed to move the car *away* from green.
-   Result: as the car approaches the grassy hill, that side of the image lights
-   up green, its score collapses, and the car steers to the other side — it
-   physically cannot choose to drive into the grass because grass never wins the
-   "best column" contest.
-2. **The building = a wall, not ground.** A wall is not ground-coloured and
-   fills the column vertically instead of receding into the distance, so that
-   column has a **low drivable-pixel fraction** and loses. The car steers away
-   from it for the same reason it avoids grass: low score.
-3. **The path = ground colour.** Only dirt/tan/gravel-coloured, low-lying
-   regions score as drivable, and the car keeps *that* centred.
+1. **Vegetation via Excess-Green (ExG),** not hue:
+   `ExG = (2G − R − B) / (R + G + B)`. It keys on green being *relatively*
+   stronger, so it survives yellowed grass, shade, and overcast — where a fixed
+   hue window collapses. (Grass lawn detection: 20.9 % old → 81.8 % ExG.)
+2. **Hard surface vs. mud via saturation.** Cement is washed-out grey (low
+   saturation); mud is saturated red-brown. Both drive fine, but telling them
+   apart is what lets the mission know *which zone* it's in.
 
-Three more safety features stack on top:
+A third **roughness** axis separates a smooth cement slab from grey gravel,
+which colour alone cannot do.
 
-- **Fail-safe on "no good option."** If *every* column is grass/wall (e.g. the
-  car reached a dead-end at the hill), the code does **not** pick the
-  least-bad direction and charge; it **slows and stops**, then reverses/searches.
-  Blindly committing is how you end up on the hill.
-- **The ultrasonic reflex overrides everything.** Even if the camera were
-  fooled (odd lighting, a tan-coloured wall), the distance sensor stops the car
-  before contact. Vision picks the route; ultrasound prevents collisions.
-- **A hard "keep-out" bias you can set.** If the hill is *always* on, say, the
-  right and the building *always* on the left, you can switch on
-  `EDGE_BIAS` in the config to add a constant gentle pull toward centre — a
-  cheap guardrail so the car hugs the middle of the wide path by default.
+**The most important consequence:** the mud course is **not** grass-free — it's
+~32 % grass tufts. So "any green → avoid" would refuse to drive on the course
+itself. Vegetation is treated as a **density, not a boolean**: ~32 % veg =
+drivable mud, ~82 % veg = lawn, keep out. `VEG_BLOCK_FRAC` (0.55) is that
+threshold and the single most important tuning number.
 
-The honest caveat: colour thresholds depend on lighting and on what your dirt
-and grass actually look like. **You must calibrate on-site** (there's a
-`--calibrate` mode that saves the camera view and the colour masks so you can
-check the car "sees" grass as grass). Do that before trusting it near the hill,
-and always test-drive with a hand on the power for the first runs.
+How a frame becomes a steer value: crop to the ground ahead → classify every
+pixel VEG / HARD / MUD → split into left | centre | right columns → score each
+`drivable − 1.5 × vegetation` → **veto any column over 55 % vegetation** (the
+keep-out rule) → steer toward the best remaining column, or stop if none is
+drivable. Keep-out is per-stage, so climbing a grassy *slope* is still allowed
+when that's the job — a bias, not a blanket ban.
+
+---
+
+## Knowing where you are without GPS
+
+**You don't need coordinates, and with no GPS module you can't use them.** A
+hobby GPS (~2.5 m) is wider than the car — it could report "on route" while
+you're half on the hill. The route is *visual*: follow the drivable ground,
+sequence on the surface under the wheels.
+
+Recognising *where* you are, cheapest-first:
+
+- **Surface signatures (always on).** Match the *terrain mix*, not the picture.
+  Each zone has a measured signature (mud ~0.90 mud; gravel ~0.87 hard; cement
+  ~0.94 hard; lawn >0.80 veg) that is robust to viewpoint and lighting. This is
+  the workhorse that drives the sequencer.
+- **Colour cues (bonus).** A big saturated colour blob detects near-perfectly
+  in ~1 ms. **Nothing may be placed on this course**, so this is limited to
+  objects already there — the bright-green compost sacks by the pit, the blue
+  toilets on the trail. Because you don't control where they are or whether
+  they've moved, a colour cue is always a **bonus exit behind a timeout**,
+  never the only way out of a stage.
+- **ORB landmarks (occasional).** For genuinely distinctive, static, man-made
+  places, store ORB keypoints (not pixels) with a geometric-consistency check.
+  Throttled, because ORB is slow on a Pi 3B+.
+
+**If you later add a GPS module** and want true waypoint following,
+`examples/route.gpx` shows the file format and `course_navigator` could layer
+GPS bearing under the camera override. Build and run vision-only first.
+
+---
+
+## The downward ground sensor (holes and steps)
+
+The one hazard nothing else on the car can see is a **hole** — the compost pit
+is an *excavated hole*. A forward ultrasonic reads "all clear" over a pit right
+up until the car drives in, and one camera cannot measure the depth of a small
+step or drop either (this is measured, not assumed — see `course/vision/steps.py`).
+
+A **second HC-SR04, angled down at the ground ahead**, is the only sensor that
+sees both: its range **shortens** over a step and **lengthens — or goes
+silent —** over a hole. It's ~2 USD and off by default (`DOWN_SENSOR_ENABLED`).
+Two concepts make it work:
+
+- **It goes on a short mast, ~20 cm up and ~35° down — not on the front wall.**
+  Bolted to the 2–3 cm front lip beside the camera it reads ~4 cm on flat
+  ground (inside its own ~2 cm blind spot) and watches a patch 11 cm ahead,
+  which arrives before the car could stop. Height fixes both. The front wall
+  stays for the forward sensor and camera, side by side. Run
+  `python3 course/tools/calibrate_ground.py --geometry` before drilling.
+- **Readings are debounced and a missing echo counts as a hole.** Chassis pitch
+  swings the reading ~2 cm per ±5°, so a real detection needs three consecutive
+  bad frames; and a deep pit (or a grazing beam off soft mud) returns no echo,
+  which is treated as a hole — a needless stop costs seconds, the pit costs the
+  run.
+
+The mount implies a **speed limit** (warning distance ÷ reaction time, ~0.5 m/s
+at the recommended geometry), which is why the pit stage runs slower than the
+rest of the route. Full mount sketch, wiring (it needs its **own** voltage
+divider), and calibration steps are in **`docs/WIRING.md` §2b**.
+
+---
+
+## Sensing: IR vs. ultrasonic
+
+Use **ultrasonic (HC-SR04)** as the main distance sensor for an outdoor car.
+
+| | **Ultrasonic (HC-SR04)** | **IR (Sharp analog, or digital obstacle module)** |
+|---|---|---|
+| Senses | Times a sound echo → real **distance** (cm). | Reflected IR intensity. Cheap digital module = just a near/far flag. |
+| Range | ~2 cm – 4 m | Sharp: ~10–80 cm. Digital: a few cm to ~30 cm. |
+| Real distance? | **Yes** — "stop at 25 cm." | Analog: yes-ish. Digital: no, a threshold. |
+| Sunlight | **Unaffected** (it's sound). | **Badly affected** — outdoor IR washes cheap sensors out. |
+| Verdict here | ✅ Primary sensor: real distances, sunlight-proof. | ⚠️ Fine as a cheap backup bump-detector, not the main sensor. |
+
+Wire an HC-SR04 as the reflex sensor (every program assumes this). `autonomous_car.py`
+has a commented `USE_IR_BACKUP` hook if you want IR as a redundant close-range trigger.
+
+---
+
+## Software, OS, and powering the Pi
+
+**OS:** Raspberry Pi OS 64-bit (Bookworm) is correct. One consequence: the
+camera stack is **`libcamera` / `picamera2`**, *not* the old `picamera`. This
+project uses `picamera2`. (A tutorial doing `import picamera` is for the old OS
+and won't work.)
+
+**Getting code onto the Pi:** `git clone` on the Pi (then `git pull` to
+update) is easiest; `scp` or VS Code Remote-SSH also work.
+
+**Powering the Pi:** a **5 V / ≥2.5 A USB power bank** (3 A better) with a
+short, thick micro-USB cable — powered **separately from the motors**. Motor
+noise on a shared supply is the single most common reason a Pi car "randomly
+resets." **Power bank → Pi. Motor battery → motors. Common-ground them, keep
+the positive rails separate.**
 
 ---
 
 ## Hardware reality check
 
 Your parts list works for a **demo**, but "off-road, uphill, on grass" asks a
-lot of two parts. None of this blocks you from building it today — but know
-what will happen:
+lot of two parts:
 
-1. **A 9 V PP3 battery cannot drive four motors uphill on grass for long.**
-   Those little rectangular 9 V batteries deliver very little current
-   (a few hundred mA before the voltage sags). Four gear motors pushing through
-   grass can pull **an amp or more each** when loaded. The car will run on the
-   bench, then crawl or stall the moment it meets the hill, and the battery
-   will die fast.
-   **Cheap fix:** power the motors from a **6×AA NiMH pack (7.2 V)** or a
-   **2S Li-ion pack (~7.4 V) with decent current**. Keep it separate from the
-   Pi's power bank, common-ground them. This one change is the difference
-   between "toy" and "climbs the hill."
-
-2. **The L293D is weak and runs hot.** The L293D is an old chip that drops
-   ~1.5–2 V internally (so 9 V in → ~7 V at the motors) and is rated only
-   ~0.6 A continuous per channel. You're paralleling two motors per channel,
-   so you'll likely exceed that under load and the chip will get hot and
-   current-limit.
-   **Cheap fix (strongly recommended):** swap the L293D for an **L298N module**
-   (~2 A/channel, has a heatsink, same 2-input-per-channel + enable-for-PWM
-   wiring — the code doesn't change) or a modern **TB6612FNG** (more efficient,
-   less voltage drop). If you must use the L293D, keep speeds modest, add a
-   heatsink, and don't be surprised by thermal cut-outs on the hill.
-
-3. **Common ground is mandatory.** Pi ground, L293D ground, motor-battery
-   ground, and sensor ground must all connect. Skipping this gives you flaky
-   sensor readings and motors that ignore commands.
-
-4. **Flyback/back-EMF.** Motors kick voltage spikes back. The L293D/L298N have
-   internal protection diodes, but noise can still reboot a poorly-powered Pi —
-   another reason for the separate power bank.
-
-The code in this repo runs unchanged whether you use the L293D on 9 V (demo) or
-an L298N on a 7.2 V pack (real off-roading) — only the wiring power source
-changes.
+1. **A 9 V PP3 battery cannot drive four motors uphill on grass for long.** It
+   delivers little current before sagging; loaded gear motors pull an amp or
+   more each. **Fix:** a **6×AA NiMH (7.2 V)** or **2S Li-ion (~7.4 V)** pack,
+   separate from the Pi, common-grounded. This is the "toy → climbs the hill"
+   change.
+2. **The L293D is weak and runs hot** (~1.5–2 V drop, ~0.6 A/channel). **Fix:**
+   an **L298N module** (~2 A/channel, drop-in, code unchanged) or a **TB6612FNG**
+   (more efficient). The `course/` pins match a **dual-L298N 4WD build** (one
+   driver per side). See `docs/DRIVER_MOSFET_REPORT.md` for the comparison and
+   `demos/` for ready-to-run L298N examples.
+3. **Common ground is mandatory** — Pi, driver, motor battery, sensors all tied
+   together, or you get flaky readings and ignored commands.
+4. **Back-EMF** from the motors can reboot a poorly-powered Pi — another reason
+   for the separate power bank.
 
 ---
 
 ## Pinout & wiring
 
-- **Diagram:** open **[`docs/pinout.svg`](docs/pinout.svg)** in a browser.
-- **Full pin/wire table and the mandatory ECHO voltage divider:**
-  see **[`docs/WIRING.md`](docs/WIRING.md)**.
+- **Diagrams:** `docs/pinout.svg` (single L293D), `docs/pinout_dual_l298n.svg`
+  (the 4WD course build), `docs/pinout_mosfet_tb6612.svg`.
+- **Full pin/wire tables, both voltage dividers, and the ground-sensor mount:**
+  **`docs/WIRING.md`** (the downward sensor is §2b).
 
-Quick GPIO summary (BCM numbering — the numbers the code uses):
+Quick GPIO summary (BCM numbering, as used by `course/course_navigator.py`):
 
-| Function | BCM GPIO | Physical pin | Goes to |
+| Function | BCM GPIO | Physical | Goes to |
 |---|---|---|---|
-| Left motors — enable/PWM (speed) | **GPIO12** | 32 | L293D EN1 |
-| Left motors — direction A | **GPIO5** | 29 | L293D IN1 |
-| Left motors — direction B | **GPIO6** | 31 | L293D IN2 |
-| Right motors — enable/PWM (speed) | **GPIO13** | 33 | L293D EN2 |
-| Right motors — direction A | **GPIO20** | 38 | L293D IN3 |
-| Right motors — direction B | **GPIO21** | 40 | L293D IN4 |
-| Ultrasonic TRIG | **GPIO23** | 16 | HC-SR04 TRIG |
-| Ultrasonic ECHO (via divider!) | **GPIO24** | 18 | HC-SR04 ECHO through 5V→3.3V divider |
-| (Optional) IR backup sensor | **GPIO25** | 22 | IR module OUT |
-| 5 V logic for L293D | 5V | 2 / 4 | L293D VCC1 (pin 16) |
-| Ground (common) | GND | 6/9/14/… | L293D GND + battery − + sensor GND |
-| Camera | — | **CSI ribbon port** | Pi camera (not a GPIO pin) |
+| Left pair — direction A / B | GPIO5 / GPIO6 | 29 / 31 | left driver IN1 / IN2 |
+| Left pair — enable/PWM | GPIO12 | 32 | left driver ENA |
+| Right pair — direction A / B | GPIO20 / GPIO21 | 38 / 40 | right driver IN1 / IN2 |
+| Right pair — enable/PWM | GPIO13 | 33 | right driver ENB |
+| Forward ultrasonic TRIG / ECHO | GPIO23 / GPIO24 | 16 / 18 | HC-SR04 (ECHO via divider) |
+| **Downward ultrasonic** TRIG / ECHO | GPIO27 / GPIO22 | 13 / 15 | 2nd HC-SR04 (its **own** divider) |
+| (Optional) IR backup | GPIO25 | 22 | IR module OUT |
+| Camera | — | CSI ribbon | Pi camera (not a GPIO pin) |
 
-Motor supply: **9 V battery + → L293D VCC2 (pin 8); battery − → common
-ground.** Pi power: **USB power bank → micro-USB (separate supply).**
+> The root `autonomous_car.py` uses the same left/right pins on a single L293D.
+> The ground-sensor pins are only used when `DOWN_SENSOR_ENABLED = True`.
 
 ---
 
-## Software setup
+## Setup
 
 On the Pi (Raspberry Pi OS 64-bit Bookworm):
 
 ```bash
 sudo apt update
 sudo apt install -y python3-gpiozero python3-picamera2 python3-opencv python3-numpy pigpio
-sudo systemctl enable --now pigpiod      # better/steadier PWM (optional but recommended)
-
-# from the repo folder:
-pip install -r requirements.txt           # only needed for anything not covered by apt
+sudo systemctl enable --now pigpiod      # steadier PWM (optional but recommended)
 ```
 
-`gpiozero`, `picamera2`, and OpenCV are all available as apt packages on
-Bookworm — that's the most reliable way to install them on the Pi.
+`gpiozero`, `picamera2`, and OpenCV install most reliably as apt packages on
+Bookworm. `requirements.txt` lists the pip names for non-apt environments.
 
-## Running the two programs
+---
 
-**Always bench-test first with the wheels off the ground.**
+## Running it
+
+**Always bench-test first, wheels off the ground.**
 
 ```bash
-# Program 1 — obstacle-avoiding demo (no camera):
+# Starter — obstacle-avoiding demo (no camera):
 python3 simple_obstacle_avoider.py
 
-# Program 2 — full autonomous car (camera + terrain steering + ultrasonic):
-python3 autonomous_car.py
+# The course navigator (camera + terrain + mission + ultrasonic):
+python3 course/course_navigator.py --mission missions/demo_course.json
 
-# Calibrate the camera colours on-site (saves images you can inspect):
-python3 autonomous_car.py --calibrate
+# Dry-run the real decision code over site photos on a laptop — no hardware:
+python3 course/course_navigator.py --replay ../Photos
+
+# Save a calibration frame + overlay from the live camera:
+python3 course/course_navigator.py --calibrate
 ```
 
-Stop either program with **Ctrl-C** — both catch it and cut the motors safely.
+`--replay` is the one to run before demo day: it executes the exact on-car
+decision code over saved photos and prints what the car *would* do for each,
+so you can tune thresholds on a laptop. Stop any program with **Ctrl-C** — all
+of them cut the motors safely.
 
-## Tuning the vision on-site
+---
 
-The colour thresholds at the top of `autonomous_car.py` (`GRASS_HSV_LOW/HIGH`,
-`GROUND_HSV_LOW/HIGH`) are starting points. To tune:
+## Calibrating on-site
 
-1. Put the car where it'll actually drive, in the actual light.
-2. Run `python3 autonomous_car.py --calibrate`. It saves `calib_frame.jpg`
-   (what the camera sees), `calib_grass_mask.jpg`, and `calib_ground_mask.jpg`.
-3. Look at the masks: grass should be white in the grass mask; your path should
-   be white in the ground mask; the building should be black in both.
-4. Adjust the HSV ranges until that's true, then re-run. Repeat in a few
-   lighting conditions (sun, cloud) — outdoor colour shifts a lot.
+Outdoor colour shifts a lot, so calibrate in the light you'll drive in:
 
-Only once the masks look right should you let the car drive near the hill.
+- **Terrain:** `python3 course/tools/calibrate_terrain.py ../Photos` re-measures
+  the zone signatures and the veg/hard/mud thresholds for your conditions.
+- **Ground sensor:** `python3 course/tools/calibrate_ground.py --measure` on
+  flat ground prints the `DOWN_NOMINAL_M` / `DOWN_TOLERANCE` to paste into
+  `course_navigator.py`, then `--watch` classifies step/hole live as you walk
+  the car to the pit edge. **Never guess these** — mud, gravel, and cement
+  don't answer the same way.
+- **Landmarks:** `python3 course/tools/capture_landmark.py <name>` records views
+  at car-camera height for ORB matching.
+
+---
+
+## Tests & CI
+
+`tests/` holds a small suite that runs without any hardware, and
+`.github/workflows/checks.yml` runs it on every pull request and on pushes to
+`main`. It can't test driving — there's no Pi on a CI runner — so it tests what
+is decided at a keyboard and only fails on the course: everything compiles, the
+mission file is sane (every stage can time out, behaviours are spelled right,
+colour cues name something real, the pit stage stays slow), and the
+ground-sensor geometry and debounce hold.
+
+```bash
+python3 -m unittest discover -s tests -t tests -v
+```
+
+---
+
+## Where to read next
+
+| Doc | What's in it |
+|---|---|
+| `docs/COURSE_ANALYSIS.md` | The full technical analysis with measurements — terrain model, sequencing, landmarks, the ground sensor, the timed turn. |
+| `docs/EXPLAINED_SIMPLY.md` | The same answers in plain language. |
+| `docs/DEMO_DAY.md` | The run-day checklist and quick reference. |
+| `docs/WIRING.md` | Pin-by-pin wiring, both voltage dividers, and the ground-sensor mount (§2b). |
+| `docs/DRIVER_MOSFET_REPORT.md` | L293D vs. L298N vs. TB6612 motor-driver comparison. |
+| `CHANGELOG.md` | How the project developed, and **why** — newest last. |
