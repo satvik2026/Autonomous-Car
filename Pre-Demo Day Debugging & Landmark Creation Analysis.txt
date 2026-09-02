@@ -1,0 +1,313 @@
+===============================================================================
+PRE-DEMO DAY DEBUGGING & LANDMARK CREATION ANALYSIS
+===============================================================================
+Written in plain English. Three jobs were done:
+
+  PART 1 - Why the car went silent on trial day (debugging).
+  PART 2 - The new landmark system so the car knows WHERE it is (Landmarks.py).
+  PART 3 - The camera colour fix you asked for.
+
+Everything below is what was checked, what was found, what was changed, and
+what YOU still need to check on the day.
+
+
+===============================================================================
+PART 1 - THE CAR WENT SILENT: WHAT HAPPENED AND WHY
+===============================================================================
+
+THE SYMPTOM YOU SAW
+-------------------
+On-site calibration worked fine. But when you ran the 4WD obstacle-avoider or
+the course navigator, the wheels never moved, the motors made no sound, and the
+screen looked frozen after a little while.
+
+THE ONE BIG CLUE
+----------------
+Both programs read the DISTANCE SENSOR (the ultrasonic) at the very TOP of
+their main loop, and they only send power to the motors AFTER that read
+finishes. Here is the important part:
+
+    read the sensor  --->  decide  --->  drive the motors
+
+If the sensor read never finishes, the program is stuck on step 1. It never
+reaches "drive the motors." So the motors stay silent and the screen stops
+printing. It looks like the program crashed, but it is really just WAITING
+forever for a sensor reading that never comes.
+
+The camera works (your calibration proved that), and calibration never touches
+the distance sensor. That fits perfectly: the thing both broken programs share,
+and calibration does not, is the distance sensor read.
+
+WHY A SENSOR READ CAN "HANG" FOREVER
+------------------------------------
+The HC-SR04 sensor works by sending out a sound "ping" and listening for the
+echo to bounce back. The software (a library called gpiozero) waits for that
+echo on a pin called ECHO. By default it wants several good readings before it
+will hand back a number. If the ECHO signal never arrives, it can keep waiting
+and never return. Common reasons the echo never arrives:
+
+  - ECHO is not wired through the little two-resistor "divider" (the sensor
+    speaks at 5 volts, the Pi listens at 3.3 volts; without the divider the
+    reading can be wrong or the pin can be damaged).
+  - ECHO or TRIG is on the wrong pin.
+  - The sensor has no power (VCC/GND), or its ground is not shared with the Pi.
+  - The sensor is facing the wrong way or is loose.
+
+RANKED LIST OF POSSIBLE CAUSES (most likely first)
+--------------------------------------------------
+1. THE DISTANCE SENSOR READ IS HANGING. (Best fit for all your symptoms.)
+   Silent motors + frozen screen + camera still fine = the loop is stuck on the
+   sensor read before it ever powers the motors.
+
+2. THE MOTORS HAVE NO POWER, even though the program is actually running.
+   If the sensor is fine but the motor battery is flat/disconnected, the common
+   ground is missing, or the ENA/ENB speed jumpers are set wrong, the motors
+   make no sound. And because the status line prints on ONE line that keeps
+   overwriting itself (it ends with "\r"), a running program can LOOK frozen
+   even when it is not.
+
+3. THE GPIO "BACKEND" HANGS AT STARTUP.
+   On newer Raspberry Pi OS (Bookworm), if the code is set to use the "pigpio"
+   backend but the pigpio service is not running, creating the motor/sensor
+   objects can hang before anything prints. Fix: sudo systemctl enable --now
+   pigpiod  (or just leave gpiozero on its default backend).
+
+4. WEAK PI POWER (brown-out). If the Pi shares power with the motors or the
+   power bank is too weak, the Pi can freeze when the motors try to move.
+
+WHAT I CHECKED IN THE CODE AND WIRING (pin cross-reference)
+-----------------------------------------------------------
+You asked me to assume the wiring was correct but still cross-check the FINAL
+project pinout diagrams against the code. I compared the GPIO pin numbers in:
+
+  - the code (course_navigator.py and the 4WD demo),
+  - docs/WIRING.md,
+  - docs/pinout.svg (single driver),
+  - demos/docs/pinout_rpi_l298n_4wd.svg (the 4WD diagram),
+  - docs/pinout_dual_l298n.svg (the final two-driver diagram).
+
+FOUR of those five agree with each other:
+     LEFT speed pin  = GPIO12 ,  RIGHT speed pin = GPIO13.
+
+But ONE was wrong: docs/pinout_dual_l298n.svg had them SWAPPED
+     (it showed LEFT = GPIO13, RIGHT = GPIO12).
+
+So if you wired the final build from THAT diagram, the left and right "enable"
+(speed) pins are crossed compared to the code.
+
+Honest note on impact: because of how the gpiozero library works, the enable
+pin is simply held ON the whole time (it is not the pin that carries the
+speed signal in this setup - the speed actually rides on the direction pins).
+So this swap by itself would NOT make the motors totally silent; both sides
+would still be switched on. But it is a real mistake in the diagram, it is
+confusing, and it must be fixed so the diagram and code agree.
+
+ACTIONS TAKEN (Part 1)
+----------------------
+- FIXED docs/pinout_dual_l298n.svg so LEFT = GPIO12 and RIGHT = GPIO13, which
+  now matches the code and every other diagram.
+
+- ADDED a new tool: course/tools/gpio_selftest.py. This is the most useful
+  thing for your exact problem. It tests the motors and the sensor SEPARATELY,
+  and - this is the key part - it reads the sensor WITH A TIME LIMIT. So if the
+  sensor read is the thing that hangs, this tool prints a clear message like
+  "NO READING in 2 s" instead of freezing. It also prints each motor step
+  ("LEFT forward...") and the exact pins it is using so you can eyeball them
+  against the diagram. Run this FIRST on demo day:
+
+      python3 course/tools/gpio_selftest.py     (wheels off the ground!)
+
+  If a wheel is silent -> it is a motor/power/jumper/ground problem.
+  If the sensor says "NO READING" -> that is the freeze; fix the ECHO wiring.
+
+WHAT YOU SHOULD CHECK ON THE DAY (simple checklist)
+---------------------------------------------------
+[ ] Run gpio_selftest.py first. It turns the silent mystery into one clear line.
+[ ] ECHO goes through the 1k/2k divider to GPIO24 (never straight to the Pi).
+[ ] TRIG on GPIO23; sensor VCC on 5V; sensor GND shared with the Pi ground.
+[ ] Motor battery charged and connected; ALL grounds tied together.
+[ ] ENA/ENB jumpers removed on each L298N so PWM speed works.
+[ ] Pi on its own 5V / 2.5A+ power bank (never off the motor battery).
+[ ] If creating the motors/sensor hangs at startup: start pigpiod, or use the
+    default gpiozero backend.
+
+
+===============================================================================
+PART 2 - THE NEW LANDMARK SYSTEM (Landmarks.py)
+===============================================================================
+
+WHAT IT IS FOR
+--------------
+The course navigator tells the car what SURFACE it is on (mud, gravel, cement).
+That is good, but it cannot tell the car "you have reached the exact spot where
+you turn left up the slope." That is a PLACE, and to know a place the car has to
+RECOGNISE it. You gave 9 reference photos in the Landmarks/ folder. The new file
+course/Landmarks.py uses them so the car knows where it is and does the right
+move at each spot.
+
+It runs together with course_navigator.py by REUSING the navigator's car
+controls and camera - so it is one program, not two programs fighting over the
+same wires. On demo day you run it instead of the plain navigator:
+
+      python3 course/Landmarks.py --drive
+
+WHAT EACH LANDMARK MEANS (exactly as you described)
+---------------------------------------------------
+  Photos 1 and 2  = the STEP (the raised cement edge). Cross it (see below).
+  Photos 4.1-4.4  = the TURN-LEFT spot (four views of the same place). When the
+                    car sees any of them: turn fully LEFT onto the slope, go UP
+                    to the top, then ROTATE RIGHT until the camera view looks
+                    like the "View" photo. Then keep going.
+  Photo View      = the picture the car tries to match at the top of the hill.
+                    It is the target for "rotate right until this is ahead."
+  Photo 3         = the COMPOST PIT (bright green sacks). Do the OPPOSITE of the
+                    turn: turn RIGHT and go DOWN the hill until the "6" view
+                    appears OR the wheels reach gravel.
+  Photo 6         = the GRAVEL and the raised CEMENT block. Drive onto the block
+                    with the normal "burst over the edge" move, cross it, and
+                    after the ~6-inch drop onto solid cement, turn RIGHT and
+                    drive straight down the cement road. Done.
+
+HOW THE CAR RECOGNISES A PLACE (and why we can trust it)
+--------------------------------------------------------
+The main method is ORB feature matching. Instead of comparing whole pictures
+pixel by pixel (which fails outdoors when the light or angle changes), ORB finds
+distinctive "corner" points and checks that they line up in a geometrically
+sensible way. I tested this on your 9 photos and the results were strong:
+
+  - The five different places (1, 2, 3, 6, View) do NOT get confused with each
+    other - each one only matched itself.
+  - The four "4.x" photos DID match each other - which is exactly right, because
+    they are four views of the same turn-left spot. So they are treated as one.
+  - After I rotated a photo 8 degrees, zoomed in, and brightened it, all 9 were
+    still recognised correctly. That is a good sign the car can still recognise
+    a place from a slightly different position and light.
+
+The compost pit gets an extra check: the amount of bright green in the picture.
+Photo 3 is about 22% green (the sacks); every other photo is under 15%. So green
+is a strong second clue for the pit - the same green cue the project already
+uses.
+
+Two safety rules (both already used elsewhere in the project):
+  - A place must be seen for 3 frames in a row before the car acts on it, so one
+    bad frame cannot make it turn.
+  - Recognising a place only CHANGES THE PLAN; it never directly floors the
+    motors. The distance sensor (don't crash) and the terrain rule (don't drive
+    into plants) can still overrule everything. So a wrong match at worst makes
+    an early turn - never a crash.
+
+HOW THE MOVES ARE RUN
+---------------------
+Inside Landmarks.py there is a simple step-by-step "state machine" (called
+RouteSequencer). It walks through the route in order and, at each place, gives
+the car one instruction at a time: follow the ground, cross the step, pivot
+left, climb, rotate to find the View, follow to the pit, pivot right, go down,
+cross the cement block, turn onto the road, finish. It is tested by a set of
+automated tests (tests/test_landmarks_sequencer.py) that walk the whole route
+and check every step happens in the right order.
+
+Some moves are timed (like the ~90-degree turn). Timed turns drift a little with
+grip and battery level, so those times are written at the top of the file and
+should be re-timed on the day - the same advice as the mission file.
+
+THE STEP: WHICH CROSSING METHOD, AND IS "MORE VOLTAGE" ENOUGH?
+-------------------------------------------------------------
+You gave two options and asked which is better and whether just raising the
+voltage/RPM is enough.
+
+  METHOD A - BOOST (recommended default). Line the car up straight to the step
+  and cross it with a short burst of extra power. With 10-inch wheels the step
+  is smaller than the wheel's radius, so momentum carries it over. This is the
+  SIMPLER method to control: no special aiming, it reuses the "burst over the
+  edge" behaviour the project already has, just with more power.
+
+  METHOD B - VEER RIGHT to the makeshift slope (the swirly cement patch by the
+  wall). This is gentler on the motors and less likely to get stuck, BUT it
+  needs the car to steer accurately to one exact spot along the wall, needs the
+  right-hand path to be clear, and depends on that little ramp still being there
+  and usable.
+
+  VERDICT: Method A (boost) is the better default because it is simpler and more
+  reliable, and the big wheels make the step easy as long as the car carries
+  momentum. Is a plain voltage/RPM increase enough? YES - but only if the car is
+  pointed STRAIGHT at the step first. If it hits the edge at an angle, one wheel
+  lifts first and the car slides sideways and can get stuck. So: "more power" is
+  enough, but "more power AND square up first" is the safe rule. Method B is
+  kept as a backup in the code (set STEP_METHOD = "veer_right") in case the
+  motors turn out to lack the torque, or the step is higher than expected.
+
+HONEST LIMITATION (please read)
+-------------------------------
+Your 9 references are phone photos taken at about chest height. The car's camera
+is much lower (around 15 cm) and has a narrower view, so real matches will be
+weaker than my bench tests. The system is built to handle this safely (the
+3-frame confirmation, generous time limits, and surface backups). But the single
+best improvement is to RE-TAKE each landmark FROM THE CAR, in demo-day light,
+using the existing tool:
+
+      python3 course/tools/capture_landmark.py <name>
+
+Landmarks.py loads every image in the Landmarks/ folder, so adding car-height
+photos only makes recognition better.
+
+Small note: the 9 photos are large (about 76 MB total). Landmarks.py shrinks
+them to the car's size when it loads them, so the big originals are not needed
+at run time; you could store smaller copies to keep the repository light.
+
+
+===============================================================================
+PART 3 - THE CAMERA COLOUR FIX
+===============================================================================
+
+WHAT WAS WRONG
+--------------
+The Raspberry Pi camera library (picamera2), when asked for "RGB888", actually
+hands back the colours in BGR order (blue and red are already in the order
+OpenCV wants). The old code then did an EXTRA red<->blue swap on top of that. Two
+swaps in a row means the saved pictures had red and blue reversed: red-brown mud
+looked blue, and the sky looked orange. It also meant the "blue object" colour
+cue could never fire, because blue was being read as red.
+
+Good news: this did NOT affect the driving. The vegetation math and the
+mud-vs-cement test both happen to give the same answer even if red and blue are
+swapped, which is why the car still drove correctly. The problem was only in the
+saved calibration images and the blue colour cue.
+
+WHAT I CHANGED
+--------------
+I removed the extra red<->blue swap everywhere the camera is read, so the
+colours are now correct:
+  - course/course_navigator.py (both the drive loop and the calibrate step)
+  - course/tools/calibrate_terrain.py
+  - course/tools/capture_landmark.py
+  - autonomous_car.py (now converts colours as BGR, and saves the frame as-is)
+
+WHAT YOU WILL NOTICE
+--------------------
+  - Calibration images now show true colours (mud looks brown, not blue). So
+    when you check them on the day, you will not be fooled into "fixing" a
+    problem that was never there.
+  - The blue portable-toilet colour cue now works, if you ever want to use it.
+  - The car drives exactly as before (the fix does not change steering).
+  - Bonus: this also makes the landmark photos and the live camera agree on
+    colour, which helps the new green-sack check in Part 2.
+
+
+===============================================================================
+SUMMARY OF FILES CHANGED / ADDED
+===============================================================================
+Changed:
+  docs/pinout_dual_l298n.svg .......... fixed swapped LEFT/RIGHT speed pins
+  course/course_navigator.py .......... camera colour fix (x2 spots)
+  course/tools/calibrate_terrain.py ... camera colour fix
+  course/tools/capture_landmark.py .... camera colour fix
+  autonomous_car.py ................... camera colour fix (BGR2HSV, save as-is)
+
+Added:
+  course/Landmarks.py ................. the landmark recognition + route pilot
+  course/tools/gpio_selftest.py ....... the pre-run motor + sensor tester
+  tests/test_landmarks_sequencer.py ... automated tests for the route logic
+  Landmarks/ (9 photos) ............... the reference images the pilot uses
+
+All automated tests pass, and the landmark self-test recognises all 9 photos
+correctly.

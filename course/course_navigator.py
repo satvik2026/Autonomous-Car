@@ -283,8 +283,11 @@ def run(mission_path):
                 continue
 
             # ---------- PERCEPTION ----------
-            rgb = cam.capture_array()
-            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            # picamera2's "RGB888" format hands back a BGR-ordered array
+            # (its FORMAT_TABLE maps "RGB888" -> "BGR"), which is exactly what
+            # OpenCV wants. Use it directly; converting RGB->BGR here would
+            # SWAP red and blue and give false colours downstream.
+            bgr = cam.capture_array()
             d = terrain.decide_steering(bgr, keepout_bias=stage.keepout_bias)
             # Vote over several frames so one puddle/shadow cannot skip a stage
             surface = voter.update(identify_surface(d['mix'], mis.zones))
@@ -388,8 +391,7 @@ def calibrate():
     import cv2
     cam = open_camera()
     try:
-        rgb = cam.capture_array()
-        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        bgr = cam.capture_array()          # picamera2 "RGB888" is already BGR
         cv2.imwrite("calib_frame.jpg", bgr)
         cv2.imwrite("calib_overlay.jpg", terrain.debug_overlay(bgr))
         d = terrain.decide_steering(bgr)

@@ -147,8 +147,9 @@ def cmd_live(name, count):
     try:
         for i in range(count):
             input(f"  view {i + 1}/{count} - position the car, then press ENTER...")
-            rgb = cam.capture_array()
-            save_view(name, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            # picamera2 "RGB888" is already BGR-ordered (OpenCV's native order);
+            # do NOT swap or the saved landmark's red/blue come out reversed.
+            save_view(name, cam.capture_array())
     except KeyboardInterrupt:
         print("\ninterrupted")
     finally:

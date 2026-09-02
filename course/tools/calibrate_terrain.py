@@ -71,8 +71,7 @@ def main():
     import time
     time.sleep(1.0)
     try:
-        rgb = cam.capture_array()
-        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        bgr = cam.capture_array()      # picamera2 "RGB888" is already BGR-ordered
         report(bgr, "live frame")
         cv2.imwrite("calib_frame.jpg", bgr)
         cv2.imwrite("calib_overlay.jpg", terrain.debug_overlay(bgr))
