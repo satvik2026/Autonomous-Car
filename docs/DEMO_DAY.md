@@ -42,21 +42,89 @@ Everything else is documentation, diagrams, or the simpler demo programs.
 sudo apt update
 sudo apt install -y python3-gpiozero python3-picamera2 python3-opencv python3-numpy
 
+# 1b. Bookworm GPIO library (see "GPIO library on Bookworm" below). The
+#     pre-installed RPi.GPIO does NOT work on Bookworm and can make the motor/
+#     sensor objects fail or hang at startup — the classic "car does nothing".
+sudo apt remove -y python3-rpi.gpio
+sudo apt install -y python3-rpi-lgpio      # or: python3-lgpio
+
 # 2. Confirm the camera is alive
 libcamera-hello --list-cameras
 
-# 3. Bench test — WHEELS OFF THE GROUND
+# 3. Prove the GPIO first — WHEELS OFF THE GROUND. This is new and it is the
+#    fastest way to catch a silent car: it tests the motors and the sensor
+#    SEPARATELY and reads the sensor with a timeout, so a bad sensor prints a
+#    clear message instead of freezing.
 cd Autonomous-Car/course
+python3 tools/gpio_selftest.py
+
+# 4. Bench test the full demo — WHEELS OFF THE GROUND
 python3 ../demos/raspberry_pi/l298n_4wd_obstacle_avoider.py   # motors + sensor
 
-# 4. Calibrate the camera on the actual course, in the actual light
+# 5. Calibrate the camera on the actual course, in the actual light
 python3 tools/calibrate_terrain.py
 
-# 5. Run the course
+# 6. Run the course
 python3 course_navigator.py --mission missions/demo_course.json
+
+# 6b. OR run the LANDMARK-driven route (recognises the 9 route photos and does
+#     the turn/step/pit sequences). Runs on top of the same Car + camera.
+python3 Landmarks.py --drive
 ```
 
 Stop anything with **Ctrl-C** — every program cuts the motors on exit.
+
+---
+
+## If the car does nothing (no motion, no motor sound, screen looks frozen)
+
+This happened on trial day. Work through it in this order — `gpio_selftest.py`
+(step 3 above) turns most of this into a one-line answer.
+
+1. **GPIO library (most likely on Bookworm).** See below — install
+   `python3-rpi-lgpio`. If creating the motors/sensor errors or hangs, this is
+   usually why, and it makes BOTH the demo and the navigator silent.
+2. **The sensor read was hanging.** The programs read the ultrasonic BEFORE they
+   power the motors, so a sensor that never answers used to freeze everything.
+   `course_navigator.py` now times the read out and prints
+   *"ultrasonic not responding"* instead of freezing — if you see that, fix the
+   ECHO wiring (divider to GPIO24) and check the sensor faces forward.
+3. **The screen only LOOKED frozen.** The status line rewrites one line; it now
+   flushes and drops a fresh line every ~3 s, so a running loop is visibly
+   alive. If it truly stopped printing, it is stuck, not slow.
+4. **Motors silent but the loop is alive** → motor battery, common ground, or
+   the ENA/ENB jumpers (they must be OFF so the GPIO drives enable).
+
+### GPIO library on Bookworm (64-bit Raspberry Pi OS)
+
+Bookworm ships an `RPi.GPIO` that does **not** work with its kernel; gpiozero
+uses **lgpio** instead. If an old tutorial or a `pip install RPi.GPIO` pulled in
+the wrong one, gpiozero throws `PinFactoryFallback` / `BadPinFactory` /
+`can not open gpiochip`, or the device objects hang. Fix:
+
+```bash
+sudo apt remove -y python3-rpi.gpio
+sudo apt install -y python3-rpi-lgpio
+# force the factory if needed:
+export GPIOZERO_PIN_FACTORY=lgpio
+```
+
+Verify with `python3 -c "from gpiozero import Device; Device.ensure_pin_factory(); print(Device.pin_factory)"` — it should print an lgpio factory, not fall back.
+
+### Powering the Pi: under-voltage warnings
+
+A high-mAh power bank is not enough on its own — the **cable** is usually the
+culprit. The Pi warns (rainbow square / `Under-voltage detected`) when the
+voltage at the board dips below ~4.63 V, and a thin or long micro-USB cable
+drops enough voltage under camera + Wi-Fi load to trip it even from a 3 A bank.
+
+- Use a **short, thick** micro-USB cable rated for high current.
+- Pick a bank that holds **≥5.1 V under load** (many sag to 4.8–5.0 V).
+- Is it safe to ignore? A brief warning at motor start (the motors are on their
+  OWN battery, so this is only the Pi's supply path) is usually harmless. A
+  **sustained** warning is real: the Pi throttles the CPU and can freeze — do
+  not ignore that one. Since the motors are separately powered here, a constant
+  warning points squarely at the bank or the cable, not motor draw.
 
 ---
 
@@ -164,6 +232,11 @@ sensor, nothing on the car detects the pit at all; the mission falls back to
 
 ## Pre-run checklist
 
+- [ ] `python3-rpi-lgpio` installed; `RPi.GPIO` removed (Bookworm GPIO library)
+- [ ] `gpio_selftest.py` passed — motors buzz, sensor returns a number (no hang)
+- [ ] Ultrasonic **two barrels face FORWARD** (pins up/down doesn't matter; the
+      barrels pointing at the sky or the ground does — it must see ahead)
+- [ ] Pi cable **short and thick**; no sustained under-voltage warning
 - [ ] Power bank charged; **separate** motor battery charged
 - [ ] All grounds tied together (Pi ↔ L298N ↔ battery −)
 - [ ] `5V-EN` jumper on each L298N; `ENA/ENB` jumpers **removed** (else no speed control)

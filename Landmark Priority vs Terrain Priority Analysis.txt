@@ -1,0 +1,114 @@
+===============================================================================
+LANDMARK PRIORITY vs TERRAIN PRIORITY -- WHICH ORDER DRIVES BETTER?
+===============================================================================
+Written in plain English, same as the pre-demo debugging file.
+
+THE QUESTION
+------------
+The car has two "opinion givers" that can disagree:
+
+  - the TERRAIN layer (vision/terrain.py) looks at the ground and says
+    "that is grass, do NOT drive there";
+  - the LANDMARK layer (Landmarks.py) recognises a place and says
+    "you are at the turn spot, now go LEFT and UP the grassy slope".
+
+On a grassy hill these two fight: terrain wants to avoid the grass, but the
+whole point of the turn is to climb that grassy slope. So who should win? This
+note walks through both answers and picks one.
+
+FIRST, WHAT NEVER CHANGES
+-------------------------
+No matter which order you choose, the ULTRASONIC REFLEX always wins over both.
+"Don't hit a wall" is never overruled by a landmark or by the terrain. So this
+whole discussion is only about grass-vs-place, never about crashing.
+
+Also remember the terrain layer is not "any green = stop". It treats grass as a
+DENSITY. The mud course is about a third grass tufts and still counts as
+drivable. Only a patch that is mostly grass (over ~55%) is a keep-out. The
+grassy HILL is mostly grass, so that is where the fight actually happens.
+
+
+ORDER A -- TERRAIN PRIORITY  (grass keep-out can overrule the landmark)
+======================================================================
+This is the cautious order. A landmark can only ADVANCE THE PLAN; it cannot
+force the wheels onto grass. If the terrain says "mostly grass ahead", the car
+steers away or stops, even mid-turn.
+
+How the car drives:
+  + On the mud course and the flat sections it is very safe. It will not wander
+    onto the manicured lawn or climb a bank by mistake.
+  + Surface changes (mud -> gravel -> cement) still drive the route fine.
+  - On the grassy hill it FIGHTS ITSELF. The turn sequence says "go up the
+    slope", but the slope is mostly grass, so the terrain keep-out refuses and
+    steers the car back down or sideways. The climb stalls, the "rotate until
+    View" step never gets a chance, and the turn looks broken.
+
+In one line: SAFE everywhere, but it cannot finish the one manoeuvre that
+REQUIRES driving on grass. For this course, that is a mission failure.
+
+
+ORDER B -- LANDMARK PRIORITY  (the place beats the grass keep-out)
+=================================================================
+This is the bold order. When a landmark says "do the turn", the car does it and
+ignores the grass keep-out for that manoeuvre.
+
+How the car drives:
+  + The grassy-hill turn becomes reliable. The car commits: pivot left, climb
+    the grass to the crest, rotate right until it sees the View. This is exactly
+    the behaviour you want at that spot.
+  - But the keep-out is the thing that KEPT THE CAR OFF the lawn and the wrong
+    banks. Weaken it and the car drives over grass more freely. If a landmark is
+    mis-recognised (and phone-photo references will mis-fire sometimes), or if
+    the priority is on during ordinary driving, the car can happily trundle onto
+    the lawn it was supposed to avoid.
+
+In one line: the turns work, but the car is grass-happy and can wander where it
+shouldn't -- more foolproof turns, buggier everywhere else.
+
+
+THE MIDDLE GROUND (what Landmarks.py already does, and the recommendation)
+=========================================================================
+Neither extreme is right. Pure terrain priority can't finish the route; pure
+landmark priority is reckless on grass. The fix is to make the priority DEPEND
+ON WHAT THE CAR IS DOING right now:
+
+  - While just FOLLOWING the ground between places  -> TERRAIN wins (stay off
+    grass, don't wander).
+  - While doing a NAMED MANOEUVRE that needs it (climb the slope, cross the
+    step, rotate to the View) -> the LANDMARK/plan wins for the length of that
+    manoeuvre only.
+  - The ultrasonic reflex wins over both, always.
+
+This is already how Landmarks.py is built: in its "follow" phases it asks the
+terrain layer where to steer (terrain priority), and only during the climb /
+turn / cross phases does it drive directly and ignore the grass (landmark
+priority). So you get the reliable grassy-hill turn WITHOUT giving the car
+permission to drive on grass the rest of the time.
+
+Two guard rails keep the bold part safe:
+  - a place must be seen for several frames before a manoeuvre starts, so a
+    single mis-read cannot send the car up a random grass bank;
+  - each manoeuvre has a time limit, so if something is wrong the car falls back
+    to ordinary, terrain-respecting driving instead of grinding up grass forever.
+
+WHICH IS MORE FOOLPROOF?
+------------------------
+  - Pure TERRAIN priority: safest against wandering, but FAILS THE ROUTE (can't
+    climb the grassy hill). Not foolproof for this course.
+  - Pure LANDMARK priority: finishes the turns, but is buggy and can drive onto
+    the lawn. Not foolproof either.
+  - SCOPED priority (terrain by default, landmark only during the manoeuvres
+    that need it, reflex always on): gets the reliable turn AND keeps the car
+    off grass the rest of the time. THIS is the most foolproof, and it is the
+    default already in Landmarks.py.
+
+HOW TO SHIFT THE BALANCE IF YOU WANT TO
+---------------------------------------
+  - Want it BOLDER (even more foolproof turns, at the cost of more grass
+    driving): let the climb phase ignore terrain entirely (it already does) and
+    lengthen the climb time limit so a slow, grass-heavy climb isn't cut short.
+  - Want it SAFER (less grass driving, at the risk of a stalled turn): shorten
+    the manoeuvre time limits and raise the number of confirmation frames, so
+    the car only commits to a climb when it is very sure of the place.
+  - The one thing NOT to change: never let a landmark override the ultrasonic
+    reflex. Foolproof turning is not worth a crash.

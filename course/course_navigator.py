@@ -85,6 +85,39 @@ LOOP_HZ = 10
 FRAME_W, FRAME_H = 640, 480
 LANDMARK_EVERY = 5         # ORB is slow on a Pi 3B+; only match every Nth frame
 
+# How long to wait for one ultrasonic reading before giving up on it. The read
+# comes BEFORE the motor commands in the loop, so a sensor that never answers
+# (dead ECHO, no divider, sensor pointing at the sky) would otherwise hang the
+# whole program -- silent motors, frozen screen. With this cap the loop instead
+# reports the fault and stops safely. See docs and gpio_selftest.py.
+SENSOR_TIMEOUT_S = 0.4
+
+
+def _read_distance(sensor, timeout=SENSOR_TIMEOUT_S):
+    """
+    Read sensor.distance in a worker thread and give up after `timeout` seconds.
+
+    gpiozero's .distance can block until its sample queue fills; if the echo
+    never toggles that never happens and the call hangs forever. Returns metres,
+    or None if the read did not complete in time (or raised) -- the caller then
+    knows the sensor is not answering instead of freezing on it.
+    """
+    import threading
+    box = {}
+
+    def worker():
+        try:
+            box['v'] = sensor.distance
+        except Exception as e:            # pragma: no cover - hardware only
+            box['e'] = e
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive() or 'e' in box:
+        return None
+    return box.get('v')
+
 
 # ---------------------------------------------------------------------------
 # Hardware (imported lazily so --replay works on a laptop)
@@ -98,6 +131,7 @@ class Car:
                            enable=RIGHT_EN, pwm=True)
         self.sensor = DistanceSensor(echo=ECHO_PIN, trigger=TRIG_PIN,
                                      max_distance=2.0)
+        self.sensor_ok = True
         self.down = None
         self._down_raw, self._down_streak, self._down_state = 'flat', 0, 'flat'
         if DOWN_SENSOR_ENABLED:
@@ -131,7 +165,15 @@ class Car:
         self.wheels(speed * direction, -speed * direction)
 
     def distance(self):
-        return self.sensor.distance
+        """
+        Forward range in metres, or None if the sensor did not answer in time.
+        A None means "sensor not responding" -- the caller stops and warns
+        rather than driving blind or hanging. With no obstacle ahead a healthy
+        sensor returns its max (~2.0 m), not None.
+        """
+        d = _read_distance(self.sensor)
+        self.sensor_ok = d is not None
+        return d
 
     def ground(self):
         """
@@ -238,6 +280,7 @@ def run(mission_path):
     frame_no = 0
     landmark = None
     burst_armed = False        # cross_step: has the ground sensor seen the lip?
+    last_beat = time.monotonic()   # heartbeat timer (see the loop tail)
 
     print(f"Course navigator: {len(mis.stages)} stages. Ctrl-C to stop.")
     if car.down is not None:
@@ -258,6 +301,16 @@ def run(mission_path):
 
             # ---------- REFLEX ----------
             dist = car.distance()
+            if dist is None:
+                # The sensor did not answer in time. Rather than hang (the old
+                # failure) or drive blind, stop and say so, loudly and on its
+                # own line, then keep looping so recovery is automatic.
+                car.stop()
+                print("\n!! ultrasonic not responding -- check the ECHO divider "
+                      "wiring and that the sensor's two barrels face FORWARD; "
+                      "car stopped, will resume when it reads.", flush=True)
+                time.sleep(0.3)
+                continue
             ground_state, ground_m = car.ground()
 
             # A hole ahead is the one hazard neither the forward sensor nor the
@@ -353,7 +406,7 @@ def run(mission_path):
                     car.drive(0.0, MIN_SPEED)          # creep up to the lip
                 print(f"{mis.progress()} {stage.name:16s} CROSSING "
                       f"armed={burst_armed} aim={cs:+.2f} "
-                      f"t={mis.elapsed():4.1f}s", end="\r")
+                      f"t={mis.elapsed():4.1f}s", end="\r", flush=True)
             elif not d['drivable']:
                 # Vegetation/wall fills the view -> never charge it.
                 car.stop()
@@ -366,9 +419,18 @@ def run(mission_path):
                     speed = min(speed, max(MIN_SPEED, speed))
                 car.drive(d['steer'], speed)
 
+            # flush so the line actually appears: a "\r" print to a terminal is
+            # not flushed on its own (only on a newline), which is why a live
+            # loop LOOKED frozen on trial day.
             print(f"{mis.progress()} {stage.name:18s} surf={str(surface):7s} "
                   f"veg={d['mix']['veg']:.2f} steer={d['steer']:+.2f} "
-                  f"d={dist*100:5.1f}cm t={mis.elapsed():5.1f}s", end="\r")
+                  f"d={dist*100:5.1f}cm t={mis.elapsed():5.1f}s", end="\r", flush=True)
+
+            # Heartbeat: drop to a fresh line every few seconds so the scrollback
+            # shows progress and a running loop can never be mistaken for a hang.
+            if time.monotonic() - last_beat > 3.0:
+                print(flush=True)
+                last_beat = time.monotonic()
 
             dt = time.monotonic() - t0
             if dt < period:
