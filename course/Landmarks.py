@@ -493,7 +493,15 @@ def run_with_navigator(ref_dir=DEFAULT_REF_DIR, mission_path=None):
             last = t0
 
             # ---- REFLEX (unchanged authority: ultrasonic always wins) ----
-            if car.distance() <= nav.STOP_DISTANCE:
+            dist = car.distance()
+            if dist is None:
+                # sensor not answering -> stop and say so, don't drive blind
+                car.stop()
+                print("!! ultrasonic not responding -- check ECHO wiring / "
+                      "sensor facing forward; stopped.", flush=True)
+                time.sleep(0.3)
+                continue
+            if dist <= nav.STOP_DISTANCE:
                 car.stop(); time.sleep(0.05)
                 car.wheels(-0.55, -0.55); time.sleep(0.3)
                 car.stop()
