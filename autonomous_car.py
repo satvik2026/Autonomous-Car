@@ -247,7 +247,9 @@ def analyse_frame(frame_rgb):
     roi_top = int(FRAME_H * ROI_TOP_FRACTION)
     roi = frame_rgb[roi_top:FRAME_H, :, :]
 
-    hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+    # picamera2's "RGB888" array is actually BGR-ordered, so convert from BGR.
+    # (Converting as RGB here would swap red/blue and mis-key the hue masks.)
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
     # 2. Colour masks.
     grass_mask = cv2.inRange(hsv, GRASS_HSV_LOW, GRASS_HSV_HIGH)
@@ -317,14 +319,14 @@ def calibrate():
     print("Calibration: capturing one frame and saving masks...")
     picam2 = open_camera()
     try:
-        frame = picam2.capture_array()  # RGB888
+        frame = picam2.capture_array()  # "RGB888" -> actually BGR-ordered
         roi_top = int(FRAME_H * ROI_TOP_FRACTION)
         roi = frame[roi_top:FRAME_H, :, :]
-        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         grass = cv2.inRange(hsv, GRASS_HSV_LOW, GRASS_HSV_HIGH)
         ground = cv2.inRange(hsv, GROUND_HSV_LOW, GROUND_HSV_HIGH)
 
-        cv2.imwrite("calib_frame.jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        cv2.imwrite("calib_frame.jpg", frame)   # already BGR; save as-is
         cv2.imwrite("calib_grass_mask.jpg", grass)
         cv2.imwrite("calib_ground_mask.jpg", ground)
 
@@ -367,7 +369,7 @@ def main():
                 continue
 
             # ---- STRATEGY LAYER: camera chooses the route ----
-            frame = picam2.capture_array()  # RGB888 array
+            frame = picam2.capture_array()  # "RGB888" -> actually BGR-ordered
             decision = analyse_frame(frame)
 
             # Slow down as we approach anything, even before the hard stop.
